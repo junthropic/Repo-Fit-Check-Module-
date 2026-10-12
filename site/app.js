@@ -6,12 +6,12 @@
   const $ = (id) => document.getElementById(id);
   const FULL_NAME = /^[A-Za-z0-9_.-]+[/][A-Za-z0-9_.-]+$/;
   const PAGE = 10; // results shown at first, and added by each "more"
-  const MAX_G_PARAM = 200; // a shared link may carry at most this many characters of search terms
+  const MAX_G_PARAM = 400; // a shared link may carry at most this many characters of search terms
   const MAX_WORDS_PER_GROUP = 8;
 
   const state = {
     repos: [], meta: null, glossary: {}, groups: null, query: '', permissiveOnly: false,
-    ignored: [], dropped: [], limit: PAGE,
+    ignored: [], dropped: [], omitted: [], limit: PAGE,
   };
   const el = {
     app: $('app'), form: $('search-form'), q: $('q'), examples: $('examples'), results: $('results'),
@@ -59,7 +59,8 @@
     if (state.permissiveOnly) params.set('p', '1');
     const qs = params.toString();
     const url = qs ? '?' + qs : location.pathname;
-    if (push) history.pushState(null, '', url);
+    const unchanged = qs === location.search.replace(/^[?]/, '');
+    if (push && !unchanged) history.pushState(null, '', url);
     else history.replaceState(null, '', url);
   }
 
@@ -117,6 +118,9 @@
     const lines = [];
     if (state.ignored.length) {
       lines.push('해석하지 못한 한국어: ' + state.ignored.join(', ') + ' (영어 단어로 추가하면 검색에 쓰입니다)');
+    }
+    if (state.omitted.length) {
+      lines.push('군더더기로 보고 뺀 영어 단어: ' + state.omitted.join(', ') + ' (필요하면 영어 단어로 추가하세요)');
     }
     if (state.dropped.length) {
       lines.push('검색어는 ' + S.MAX_GROUPS + '개까지 쓰므로 뺀 것: ' + state.dropped.map((g) => g[0]).join(', '));
@@ -219,6 +223,7 @@
       state.groups = r.groups;
       state.ignored = r.ignored;
       state.dropped = r.dropped;
+      state.omitted = r.omitted;
       state.query = query;
       el.q.value = query;
       render({ push });
@@ -228,7 +233,8 @@
       state.query = '';
       state.ignored = [];
       state.dropped = [];
-      render({ push });
+      state.omitted = [];
+      render({ push: false });
       const unknown = e.message.includes('Not understood') ? ' 알아듣지 못한 단어: ' + e.message.split('Not understood: ')[1] + '.' : '';
       showError('용어집에 있는 단어도 영어 단어도 찾지 못했습니다.' + unknown + ' 영어 키워드를 함께 적어 보세요. 예: korea labor law');
     }
@@ -238,8 +244,13 @@
     showError('');
     try {
       const merged = S.mergeGroups(state.groups, S.parseTermsArg(text));
+      if (merged.groups.length === state.groups.length && !merged.dropped.length) {
+        showError('이미 있는 검색어입니다.');
+        return;
+      }
+      const known = new Set(state.dropped.map((g) => g.join('|')));
       state.groups = merged.groups;
-      state.dropped = merged.dropped;
+      state.dropped = state.dropped.concat(merged.dropped.filter((g) => !known.has(g.join('|'))));
       state.limit = PAGE;
       el.addInput.value = '';
       render();
@@ -304,6 +315,12 @@
       state.query = q.slice(0, S.MAX_QUERY_LENGTH);
       state.ignored = [];
       state.dropped = [];
+      state.omitted = [];
+      try {
+        const r = S.interpretPurpose(state.query, state.glossary);
+        state.ignored = r.ignored;
+        state.omitted = r.omitted;
+      } catch (e) { /* the chips in g are what counts */ }
       el.q.value = state.query;
       render();
       return;

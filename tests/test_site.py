@@ -66,6 +66,10 @@ class SiteStructure(unittest.TestCase):
         for name in ("app.js", "search.js"):
             self.assertNotRegex((SITE / name).read_text(encoding="utf-8"), r"\.style\b|setAttribute\(.style", name)
 
+    def test_a_display_rule_cannot_override_the_hidden_attribute(self):
+        css = (SITE / "style.css").read_text(encoding="utf-8")
+        self.assertRegex(css, r"\[hidden\]\s*\{\s*display:\s*none\s*!important")
+
     def test_results_are_not_one_big_live_region(self):
         html = (SITE / "index.html").read_text(encoding="utf-8")
         self.assertNotIn("aria-live", html)

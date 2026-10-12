@@ -62,6 +62,20 @@ CASES = [
     {"purpose": "노무현 연설문"},
     {"purpose": "labor" + chr(0x1c) + "law"},
     {"purpose": chr(0xfeff) + "labor law" + chr(0x85)},
+    # position based glossary matching, fallback and omitted words, characters outside the BMP
+    {"purpose": "노동법 준수 방법"},
+    {"purpose": "법인 노동법"},
+    {"purpose": "데이터베이스 데이터"},
+    {"purpose": "한국어 맞춤법 검사"},
+    {"purpose": "ERPNext"},
+    {"purpose": "회계 ERP invoice"},
+    {"purpose": "project management"},
+    {"purpose": "IT service management"},
+    {"purpose": "help desk software"},
+    {"purpose": "who is"},
+    {"purpose": "labor law " + chr(0x20000)},
+    {"purpose": "labor law " + chr(0xbd) * 2},
+    {"purpose": "labor law " + chr(0x20000) + chr(0x20000)},
     {"terms": "law|law, law"},
     {"terms": "pdf, translation, xyzzy"},
     {"terms": "as, is"},
@@ -120,7 +134,7 @@ def run_python(repos, cases):
         scored, excluded = D.rank(repos, groups, c.get("allowed", []), c.get("avoid", []), min_rel=D.MIN_REL, now=NOW)
         main, small = D.select(scored, 10)
         pick = lambda r: {k: r[k] for k in ("full_name", "rel", "pop", "days", "lic_status", "score", "why")}
-        out.append({"groups": groups, "dropped": interpretation["dropped"], "ignored": interpretation["ignored"],
+        out.append({"groups": groups, "dropped": interpretation["dropped"], "ignored": interpretation["ignored"], "omitted": interpretation["omitted"],
                     "main": [pick(r) for r in main], "small": [pick(r) for r in small],
                     "scored": len(scored), "excluded": len(excluded), "unmatched": D.unmatched_groups(repos, groups)})
     return out
@@ -148,7 +162,8 @@ class Parity(unittest.TestCase):
                     self.assertEqual(a, b)
                     continue
                 self.assertEqual(a["groups"], b["groups"])
-                self.assertEqual((a["dropped"], a["ignored"], a["unmatched"]), (b["dropped"], b["ignored"], b["unmatched"]))
+                self.assertEqual((a["dropped"], a["ignored"], a["omitted"], a["unmatched"]),
+                                 (b["dropped"], b["ignored"], b["omitted"], b["unmatched"]))
                 self.assertEqual((a["scored"], a["excluded"]), (b["scored"], b["excluded"]))
                 for part in ("main", "small"):
                     self.assertEqual([r["full_name"] for r in a[part]], [r["full_name"] for r in b[part]])
@@ -179,6 +194,13 @@ class Parity(unittest.TestCase):
             self.assertEqual(by_name[f"odd/labor-law-{i}"], 9999, odd[i])  # not a valid GitHub timestamp: no date
         self.assertEqual(by_name["odd/labor-law-8"], 0)  # a date in the future is "today", not an error
 
+    def test_rounding_is_the_same_even_on_exact_ties(self):
+        values = [0.8125, 0.0005, 0.1235, 0.9995, 1 / 3, 0.70 * 0.875 + 0.15 + 0.05, 0.0625, 0.4375, 0.5, 1.0, 0.0]
+        p = subprocess.run(["node", str(ROOT / "tests" / "run_js.js")], input=json.dumps({"round3": values}),
+                           capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(json.loads(p.stdout), [D.round3(v) for v in values])
+        self.assertEqual(D.round3(0.8125), 0.813)  # the tie that Python's round() and JS toFixed() disagreed on
+
     def test_shared_constants_are_identical(self):
         js = run_js([], [])  # warm-up: node starts and handles an empty case list
         self.assertEqual(js, [])
@@ -189,6 +211,8 @@ class Parity(unittest.TestCase):
         self.assertEqual(consts["stopwords"], sorted(D.STOPWORDS))
         self.assertEqual(consts["generic"], sorted(D.GENERIC))
         self.assertEqual(consts["singleLetterOk"], sorted(D.SINGLE_LETTER_OK))
+        self.assertEqual(consts["grammar"], sorted(D.GRAMMAR))
+        self.assertEqual(consts["weak"], sorted(D.WEAK))
         self.assertEqual((consts["minRel"], consts["maxGroups"]), (D.MIN_REL, D.MAX_GROUPS))
         self.assertEqual(consts["permissive"], sorted(x.upper() for x in D.PERMISSIVE))
 

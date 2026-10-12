@@ -21,8 +21,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 FULL_NAME = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
-# Control characters, zero-width and bidirectional marks (a U+202E can reverse how a description reads).
-CONTROL = re.compile(r"[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]")
+# Control characters, zero-width space and bidirectional marks (a U+202E can reverse how a description reads).
+# The zero-width joiner and non-joiner stay: they hold emoji sequences and some scripts together.
+CONTROL = re.compile(r"[\u0000-\u001f\u007f-\u009f\u061c\u200b\u200e-\u200f\u2028-\u202e\u2060-\u2069\ufeff]")
 # GitHub timestamps only; anything else is stored as "no date" so the site never has to guess.
 ISO_Z = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 # GitHub allows 350 characters. The whole text is kept so the site searches exactly what the skill searches.

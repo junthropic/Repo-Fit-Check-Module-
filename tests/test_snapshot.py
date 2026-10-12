@@ -89,6 +89,12 @@ class Snapshot(unittest.TestCase):
             self.assertNotIn(chr(code), r["description"], hex(code))
             self.assertNotIn(chr(code), r["topics"][0], hex(code))
 
+    def test_joiners_that_hold_emoji_and_scripts_together_are_kept(self):
+        astronaut = chr(0x1f9d1) + chr(0x200d) + chr(0x1f680)
+        r = B.normalize(raw(description="crew " + astronaut + " " + chr(0x200b) + "x"))
+        self.assertIn(astronaut, r["description"])         # the zero-width joiner stays
+        self.assertNotIn(chr(0x200b), r["description"])    # the zero-width space goes
+
     def test_only_github_timestamps_are_stored(self):
         self.assertEqual(B.normalize(raw(pushed_at="2026-10-01T00:00:00Z"))["pushed_at"], "2026-10-01T00:00:00Z")
         for bad in ("garbage", "2026-10-01", "2026-10-01T00:00:00", "2026-10-01T00:00:00Z\n", None, ""):

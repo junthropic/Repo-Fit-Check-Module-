@@ -32,6 +32,9 @@
 
 * { box-sizing: border-box; }
 
+/* A rule such as .more { display: block } would otherwise beat the browser's own [hidden] style. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   background: var(--bg);
@@ -108,6 +111,7 @@ main:not(.home) .examples { display: none; }
 #results { margin-top: 20px; }
 
 .note { margin: 0 0 12px; color: var(--muted); font-size: 14px; }
+.notes { padding: 8px 12px; color: var(--fg); background: var(--warn-bg); border: 1.5px solid var(--warn-border); border-radius: 8px; }
 
 #terms-box { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 10px; }
 .label { color: var(--muted); font-size: 14px; }

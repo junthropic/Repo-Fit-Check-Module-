@@ -228,3 +228,44 @@ test('every result link goes to github.com, opens safely and says it opens a new
   assert.strictEqual(link.rel, 'noopener noreferrer');
   assert.match(link.textContent, /새 탭에서 열림/);
 });
+
+test('a sentence tells which filler it removed, so no word vanishes unnoticed', async () => {
+  const app = await boot({ stars: snapshot(pdfPool(12)) });
+  app.submit('help desk software');
+  assert.match(app.$('notes').textContent, /군더더기로 보고 뺀 영어 단어: help, software/);
+  assert.strictEqual(app.$('notes').hidden, false);
+});
+
+test('a link opened again still shows the words the sentence left out', async () => {
+  const q = encodeURIComponent('pdf 렌더링');
+  const app = await boot({ stars: snapshot(pdfPool(12)), search: '?q=' + q + '&g=pdf' });
+  assert.match(app.$('notes').textContent, /해석하지 못한 한국어: 렌더링/);
+});
+
+test('chips added later never make the words cut earlier disappear from the note', async () => {
+  const app = await boot({ stars: snapshot(pdfPool(12)) });
+  app.submit('alpha beta gamma delta epsilon zeta eta theta');
+  assert.match(app.$('notes').textContent, /eta, theta/);
+  app.$('add-input').value = 'kappa';
+  app.$('add-form').dispatch('submit');
+  assert.match(app.$('notes').textContent, /eta, theta, kappa/);
+});
+
+test('adding a word that is already a chip says so and changes nothing', async () => {
+  const app = await boot({ stars: snapshot(pdfPool(12)) });
+  app.submit('pdf translation');
+  app.$('add-input').value = 'pdf';
+  app.$('add-form').dispatch('submit');
+  assert.deepStrictEqual(app.chipWords(), ['pdf', 'translation']);
+  assert.match(app.$('error').textContent, /이미 있는 검색어/);
+});
+
+test('the same search twice leaves one history entry, and a failed search leaves none', async () => {
+  const app = await boot({ stars: snapshot(pdfPool(12)) });
+  app.submit('pdf translation');
+  app.submit('pdf translation');
+  const pushes = () => app.history.calls.filter((c) => c[0] === 'push').length;
+  assert.strictEqual(pushes(), 1);
+  app.submit('가나다라마바사');
+  assert.strictEqual(pushes(), 1);
+});

@@ -187,3 +187,50 @@ test('only GitHub timestamps count as dates; the rest means "no date", never NaN
   assert.strictEqual(S.daysSince('2099-01-01T00:00:00Z', NOW), 0);
   assert.strictEqual(S.daysSince('2024-02-29T12:00:00Z', NOW) > 0, true); // a real leap day is valid
 });
+
+// ---- position based glossary matching, omitted words, fallback (regression review) --------------
+test('a short glossary word survives next to a longer word that contains it', () => {
+  assert.ok(words('노동법 준수 방법').includes('law'));
+  assert.ok(words('법인 노동법').includes('law'));
+  assert.deepStrictEqual(words('데이터베이스 데이터'), ['database', 'data']);
+});
+
+test('words that merely contain a glossary key do not trigger it', () => {
+  ['한국어 맞춤법 검사', '기법 모음', 'pdf 수법', 'pdf 법칙', 'pdf 공법'].forEach((t) => {
+    assert.ok(!S.interpretPurpose('pdf ' + t, glossary).groups.flat().includes('law'), t);
+  });
+  assert.ok(!words('pdf 인사말').includes('hr'));
+  assert.strictEqual(words('바코드 스캐너 pdf')[0], 'barcode');
+  assert.strictEqual(words('서버리스 배포')[0], 'serverless');
+});
+
+test('an ASCII glossary key is not a piece of a longer English word', () => {
+  assert.deepStrictEqual(words('ERPNext'), ['erpnext']);
+  assert.deepStrictEqual(words('회계 ERP invoice'), ['accounting', 'erp', 'invoice']);
+});
+
+test('nothing but weak words is still a search; nothing but grammar is an error', () => {
+  assert.deepStrictEqual(words('project management'), ['project', 'management']);
+  assert.throws(() => S.interpretPurpose('who is', glossary), (e) => e.code === 'no_terms');
+});
+
+test('removed filler that could have been a term is reported', () => {
+  assert.deepStrictEqual(S.interpretPurpose('I am looking for a tool that can help me translate PDF documents into Korean', glossary).omitted,
+    ['looking', 'help', 'tool']);
+  assert.deepStrictEqual(S.interpretPurpose('help desk software', glossary).omitted, ['help', 'software']);
+  assert.deepStrictEqual(S.interpretPurpose('pdf translation', glossary).omitted, []);
+});
+
+test('plural s is added only to words of three letters or more; rounding is half up', () => {
+  assert.strictEqual(S.wordIn('r', new Set(['rs'])), false);
+  assert.strictEqual(S.wordIn('pdf', new Set(['pdfs'])), true);
+  assert.strictEqual(S.round3(0.8125), 0.813);
+  assert.strictEqual(S.round3(0.8124), 0.812);
+});
+
+test('unknown Korean is measured in characters, and fractions are not letters', () => {
+  const astral = String.fromCodePoint(0x20000);
+  assert.deepStrictEqual(S.interpretPurpose('labor law ' + astral, glossary).ignored, []);
+  assert.deepStrictEqual(S.interpretPurpose('labor law ' + astral + astral, glossary).ignored, [astral + astral]);
+  assert.deepStrictEqual(S.interpretPurpose('labor law ' + String.fromCharCode(0xbd, 0xbd), glossary).ignored, []);
+});

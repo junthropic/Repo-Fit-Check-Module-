@@ -15,14 +15,26 @@
     'a', 'an', 'the', 'and', 'or', 'for', 'of', 'to', 'in', 'on', 'with', 'my', 'our', 'tool', 'tools',
     'that', 'this', 'using', 'use', 'app', 'project',
     'i', 'am', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'can', 'could', 'would', 'should', 'will',
-    'shall', 'may', 'might', 'must', 'do', 'does', 'did', 'you', 'your', 'yours', 'me', 'we', 'us', 'it', 'its',
+    'shall', 'may', 'might', 'must', 'do', 'does', 'did', 'you', 'your', 'yours', 'me', 'we', 'its',
     'they', 'them', 'their', 'he', 'she', 'his', 'her', 'find', 'finding', 'looking', 'look', 'help', 'helps',
     'want', 'wants', 'need', 'needs', 'good', 'best', 'better', 'some', 'any', 'something', 'anything',
-    'please', 'like', 'how', 'what', 'which', 'who', 'whom', 'where', 'when', 'why', 'get', 'gets', 'make',
-    'makes', 'have', 'has', 'had', 'into', 'from', 'by', 'at', 'as', 'about', 'than', 'then', 'so', 'if', 'not',
-    'no', 'but', 'all', 'more', 'most', 'very', 'also', 'just', 'there', 'here', 'used', 'one', 'own', 'up',
-    'out', 'over', 'too', 'such', 'these', 'those', 'other', 'another',
+    'please', 'like', 'how', 'what', 'which', 'who', 'whom', 'where', 'when', 'why', 'get', 'gets',
+    'have', 'has', 'had', 'into', 'from', 'by', 'at', 'as', 'about', 'than', 'then', 'so', 'if', 'not',
+    'no', 'but', 'all', 'more', 'most', 'very', 'also', 'there', 'here', 'used', 'one', 'own', 'up',
+    'out', 'too', 'such', 'these', 'those', 'other', 'another',
   ]);
+  // Words of STOPWORDS that are pure grammar. Any other removed word of 4+ letters is reported to the user,
+  // so that a word which was a real term in this search never vanishes silently. Identical to GRAMMAR in discover.py.
+  const GRAMMAR = new Set([
+    'a', 'an', 'the', 'and', 'or', 'for', 'of', 'to', 'in', 'on', 'with', 'my', 'our', 'that', 'this', 'i', 'am',
+    'is', 'are', 'was', 'were', 'be', 'been', 'being', 'can', 'could', 'would', 'should', 'will', 'shall', 'may',
+    'might', 'must', 'do', 'does', 'did', 'you', 'your', 'yours', 'me', 'we', 'its', 'they', 'them', 'their', 'he',
+    'she', 'his', 'her', 'how', 'what', 'which', 'who', 'whom', 'where', 'when', 'why', 'have', 'has', 'had', 'into',
+    'from', 'by', 'at', 'as', 'about', 'than', 'then', 'so', 'if', 'not', 'no', 'but', 'all', 'also', 'there', 'here',
+    'such', 'these', 'those',
+  ]);
+  // Little meaning, but better than nothing: used only when nothing else is left ("project management").
+  const WEAK = new Set(['tool', 'tools', 'app', 'project', 'use', 'using']);
   const GENERIC = new Set(['platform', 'system', 'service', 'program', 'software', 'solution', 'application',
     'management']);
   const SINGLE_LETTER_OK = new Set(['c', 'r']); // language names; any other one-letter word is noise
@@ -51,7 +63,7 @@
     }
   }
 
-  const round3 = (x) => Number(x.toFixed(3));
+  const round3 = (x) => Math.floor(x * 1000 + 0.5) / 1000; // half up, same operations as round3 in discover.py
 
   // ------------------------------------------------------------------ terms
   function hasNonAscii(text) {
@@ -85,7 +97,7 @@
     return out;
   }
 
-  function finish(groups0, ignored) {
+  function finish(groups0, ignored, omitted) {
     const groups = dedupeGroups(groups0);
     const bad = groups.flat().filter(hasNonAscii);
     if (bad.length) {
@@ -94,7 +106,7 @@
     if (!groups.length) {
       throw new QueryError('no_terms', 'No usable search terms.' + (ignored.length ? ' Not understood: ' + ignored.join(', ') : ''));
     }
-    return { groups: groups.slice(0, MAX_GROUPS), dropped: groups.slice(MAX_GROUPS), ignored };
+    return { groups: groups.slice(0, MAX_GROUPS), dropped: groups.slice(MAX_GROUPS), ignored, omitted };
   }
 
   /** Explicit terms, e.g. "labor|employment, law|statute, compliance" (what the chips hold). */
@@ -104,43 +116,82 @@
       const words = part.split('|').map((w) => w.replace(/^ +| +$/g, '').toLowerCase()).filter(Boolean);
       if (words.length) groups.push(words);
     });
-    return finish(groups, []);
+    return finish(groups, [], []);
+  }
+
+  /** An ASCII glossary key ('ERP') must not be a piece of a longer English word ('ERPNext'). */
+  function asciiBoundaryOk(text, i, j, key) {
+    if (!/^[\x00-\x7f]+$/.test(key)) return true;
+    const isAsciiAlnum = (c) => c !== undefined && /^[A-Za-z0-9]$/.test(c);
+    return !isAsciiAlnum(text[i - 1]) && !isAsciiAlnum(text[j]);
   }
 
   /** Free text. Korean words the glossary knows become English synonym groups; English words pass through.
-   *  Returns {groups, dropped (cut because only MAX_GROUPS are used), ignored (Korean words not understood)}. */
+   *  Returns {groups, dropped (cut because only MAX_GROUPS are used), ignored (Korean words not understood),
+   *  omitted (English filler that might have been a real term)}. */
   function interpretPurpose(text0, glossary) {
     const text = normalizeSpace(text0);
-    const used = [];
+    // Longest glossary words first; each one claims the characters it explains, wherever it occurs. A shorter
+    // word cannot claim them again but may still match elsewhere, so a sentence can contain both.
+    const taken = new Array(text.length).fill(false);
     const found = [];
+    const weak = [];
+    const omitted = [];
     Object.entries(glossary || {})
       .sort((a, b) => b[0].length - a[0].length)
       .forEach(([ko, en]) => {
-        if (text.includes(ko) && !used.some((u) => ko.includes(u) || u.includes(ko))) {
-          used.push(ko);
-          // an empty value means "ignore this word" (방법 must not trigger 법)
-          if (en) found.push([text.indexOf(ko), en.split('|').map((w) => w.toLowerCase())]);
+        let first = -1;
+        let start = 0;
+        for (;;) {
+          const i = text.indexOf(ko, start);
+          if (i < 0) break;
+          const j = i + ko.length;
+          if (!taken.slice(i, j).some(Boolean) && asciiBoundaryOk(text, i, j, ko)) {
+            for (let k = i; k < j; k += 1) taken[k] = true;
+            if (first < 0) first = i;
+          }
+          start = i + 1;
         }
+        // an empty value means "ignore this word"
+        if (first >= 0 && en) found.push([first, en.split('|').map((w) => w.toLowerCase())]);
       });
     const re = new RegExp(TERM_SOURCE, 'g');
     let m;
     while ((m = re.exec(text)) !== null) {
       const w = m[0].toLowerCase();
-      if (STOPWORDS.has(w) || /^[0-9]+$/.test(w) || (w.length < 2 && !SINGLE_LETTER_OK.has(w))) continue;
+      if (STOPWORDS.has(w) || /^[0-9]+$/.test(w) || (w.length < 2 && !SINGLE_LETTER_OK.has(w))) {
+        if (WEAK.has(w)) weak.push([m.index, [w]]);
+        else if (STOPWORDS.has(w) && !GRAMMAR.has(w) && w.length >= 4 && !omitted.includes(w)) omitted.push(w);
+        continue;
+      }
       if (!found.some(([, g]) => g.includes(w))) found.push([m.index, [w]]);
     }
-    const groups = found
-      .sort((a, b) => a[0] - b[0])
-      .map(([, g]) => g)
-      .filter((g) => !g.every((w) => GENERIC.has(w)));
-    let rest = text;
-    used.forEach((ko) => { rest = rest.split(ko).join(' '); });
-    rest = rest.replace(new RegExp(TERM_SOURCE, 'g'), ' ');
-    const ignored = [];
-    (rest.match(/\p{L}+/gu) || []).forEach((w) => {
-      if (w.length >= 2 && !ignored.includes(w)) ignored.push(w);
+    const kept = [];
+    found.sort((a, b) => a[0] - b[0]).forEach(([pos, g]) => {
+      if (g.every((w) => GENERIC.has(w))) weak.push([pos, g]);
+      else kept.push(g);
     });
-    return finish(groups, ignored);
+    weak.sort((a, b) => a[0] - b[0]);
+    let groups = kept;
+    if (!groups.length && weak.length) {
+      groups = weak.map(([, g]) => g);
+    } else {
+      weak.forEach(([, g]) => g.forEach((w) => {
+        if (w.length >= 4 && !omitted.includes(w)) omitted.push(w);
+      }));
+    }
+    const rest = text.split('').map((c, k) => (taken[k] ? ' ' : c)).join('').replace(new RegExp(TERM_SOURCE, 'g'), ' ');
+    const ignored = [];
+    let run = '';
+    [...rest, ' '].forEach((ch) => {
+      if (/\p{L}/u.test(ch)) {
+        run += ch;
+      } else {
+        if ([...run].length >= 2 && !ignored.includes(run)) ignored.push(run);
+        run = '';
+      }
+    });
+    return finish(groups, ignored, omitted);
   }
 
   const parseTermsArg = (arg) => interpretTerms(arg).groups;
@@ -165,7 +216,7 @@
     const parts = String(word).toLowerCase().match(/[a-z0-9]+/g) || [];
     if (!parts.length) return false;
     // singular <- plural only for longer words: 'as'->'a', 'its'->'it', 'news'->'new' are not plurals
-    const has = (p) => toks.has(p) || toks.has(p + 's') || (p.length >= 5 && p.endsWith('s') && toks.has(p.slice(0, -1)));
+    const has = (p) => toks.has(p) || (p.length >= 3 && toks.has(p + 's')) || (p.length >= 5 && p.endsWith('s') && toks.has(p.slice(0, -1)));
     return parts.every(has);
   }
 
@@ -362,8 +413,8 @@
   }
 
   return {
-    QueryError, STOPWORDS, GENERIC, SINGLE_LETTER_OK, PERMISSIVE, MIN_REL, MAX_GROUPS, MAX_QUERY_LENGTH,
-    parseGlossary, normalizeSpace, dedupeGroups, interpretTerms, interpretPurpose, parseTermsArg, parsePurpose,
+    QueryError, STOPWORDS, GRAMMAR, WEAK, GENERIC, SINGLE_LETTER_OK, PERMISSIVE, MIN_REL, MAX_GROUPS, MAX_QUERY_LENGTH,
+    parseGlossary, normalizeSpace, round3, dedupeGroups, interpretTerms, interpretPurpose, parseTermsArg, parsePurpose,
     mergeGroups,
     tokens, wordIn, groupScores, documentFrequencies, idfWeights, unmatchedGroups, relevance, daysSince, activity,
     licenseStatus, scoreRepo, rank, select, runSearch, isPermissive, licenseBadge, whyLabel,
