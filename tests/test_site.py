@@ -102,30 +102,16 @@ class SiteStructure(unittest.TestCase):
         self.assertIn("SIL Open Font License, Version 1.1", notice)
         self.assertIn("Copyright 2016 The Inter Project Authors", notice)
 
-    def test_the_korean_font_slices_are_all_present_local_and_licensed(self):
-        html = (SITE / "index.html").read_text(encoding="utf-8")
-        links = re.findall(r'<link rel="stylesheet" href="([^"]+)"', html)
-        self.assertIn("fonts/noto-sans-kr.css", links)
-        self.assertLess(links.index("fonts/noto-sans-kr.css"), links.index("style.css"))
-        css_path = SITE / "fonts" / "noto-sans-kr.css"
-        css = css_path.read_text(encoding="utf-8")
-        faces = re.findall(r"@font-face\s*\{(.*?)\}", css, re.S)
-        self.assertGreater(len(faces), 100)  # the font is split into many slices by character range
-        urls = []
-        for face in faces:
-            self.assertIn("font-display: swap", face)
-            self.assertIn("unicode-range:", face)  # without it the browser would load every slice
-            self.assertIn("Noto Sans KR Variable", face)
-            url = re.search(r"url\(([^)]+)\)", face).group(1)
-            self.assertRegex(url, r"^noto-sans-kr/noto-sans-kr-[0-9]+-wght-normal\.woff2$")
-            self.assertEqual((css_path.parent / url).read_bytes()[:4], b"wOF2", url)
-            urls.append(url)
-        self.assertEqual(len(urls), len(set(urls)))
-        on_disk = {p.name for p in (SITE / "fonts" / "noto-sans-kr").iterdir()}
-        self.assertEqual(on_disk, {u.split("/")[1] for u in urls})  # no unused or missing file
-        self.assertIn("SIL Open Font License, Version 1.1", (SITE / "fonts" / "Noto-Sans-KR-OFL.txt").read_text(encoding="utf-8"))
+    def test_hangul_uses_the_system_fonts_and_no_korean_font_is_shipped(self):
+        # a Korean web font costs 200-800 KB per visitor (it is cut in slices, and cards show Korean descriptions)
         style = (SITE / "style.css").read_text(encoding="utf-8")
-        self.assertRegex(style, r'--font:\s*"Inter Variable",\s*"Noto Sans KR Variable"')  # Latin from Inter, Hangul from Noto
+        stack = re.search(r"--font:\s*([^;]+);", style).group(1)
+        self.assertIn('"Apple SD Gothic Neo"', stack)
+        self.assertIn('"Malgun Gothic"', stack)
+        self.assertNotRegex(stack, r"Noto Sans KR|Nanum|Pretendard Variable")
+        self.assertEqual(sorted(p.name for p in (SITE / "fonts").iterdir()), ["Inter-OFL.txt", "inter-latin-wght-normal.woff2"])
+        html = (SITE / "index.html").read_text(encoding="utf-8")
+        self.assertEqual(re.findall(r'<link rel="stylesheet" href="([^"]+)"', html), ["style.css"])
 
     def test_search_engines_are_asked_not_to_index_the_page(self):
         html = (SITE / "index.html").read_text(encoding="utf-8")
