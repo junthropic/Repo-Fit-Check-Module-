@@ -32,7 +32,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  SKILL_REF: c0e3c471fdbe85ed7a028759dba6bc2eea24f774
+  SKILL_REF: 0348b23611e2ecb3efc8bf175d36431b5414b50c
 
 jobs:
   test:
