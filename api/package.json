@@ -1,0 +1,10 @@
+{
+  "name": "star-search-interpret",
+  "private": true,
+  "version": "0.1.0",
+  "description": "S1: model-based interpretation of the search sentence (Cloudflare Worker)",
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "0.129.0"
+  }
+}

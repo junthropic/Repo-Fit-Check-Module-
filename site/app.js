@@ -8,10 +8,13 @@
   const PAGE = 10; // results shown at first, and added by each "more"
   const MAX_G_PARAM = 400; // a shared link may carry at most this many characters of search terms
   const MAX_WORDS_PER_GROUP = 8;
+  const MODEL_TIMEOUT_MS = 3000; // the model gets this long; after that the glossary interpretation is used
+  const MODEL_WORD = /^[A-Za-z0-9][A-Za-z0-9+#.-]{0,39}$/;
 
   const state = {
     repos: [], meta: null, glossary: {}, groups: null, query: '', permissiveOnly: false,
     ignored: [], dropped: [], omitted: [], limit: PAGE,
+    interpretUrl: null, mode: 'simple', modelFailed: false, ticket: 0,
   };
   const el = {
     app: $('app'), form: $('search-form'), q: $('q'), examples: $('examples'), results: $('results'),
@@ -19,6 +22,7 @@
     interpret: $('notice-interpret'), notes: $('notes'), summary: $('summary'), status: $('status'),
     message: $('message'), list: $('list'), more: $('more'),
     smallBox: $('small-box'), smallList: $('small-list'), error: $('error'), meta: $('meta'),
+    modelNotice: $('notice-model'),
   };
 
   // ----------------------------------------------------------------- helpers
@@ -138,6 +142,15 @@
     else el.addInput.focus();
   }
 
+  /** Says how the sentence was understood, so a result never pretends to be more than it is. */
+  function interpretNotice() {
+    if (state.mode === 'model') return 'AI가 문장을 검색어로 풀어 검색했습니다. 검색어 칩은 고치거나 지울 수 있습니다.';
+    if (state.mode === 'link') return '링크에 담긴 검색어로 검색했습니다. 검색어 칩은 고치거나 지울 수 있습니다.';
+    const base = '한국어 용어집에 있는 단어와 영어 단어만 이해합니다.';
+    if (state.modelFailed) return '문장을 AI로 해석하지 못해 간이 해석으로 검색했습니다. ' + base;
+    return '간이 해석으로 검색했습니다. ' + base;
+  }
+
   /** The one place screen readers hear about a new result: a short summary, not the whole list. */
   function announce(text) {
     el.status.textContent = text;
@@ -154,7 +167,7 @@
     }
 
     renderChips();
-    el.interpret.textContent = '간이 해석으로 검색했습니다. 한국어 용어집에 있는 단어와 영어 단어만 이해합니다.';
+    el.interpret.textContent = interpretNotice();
     const before = o.keepList ? el.list.children.length : 0;
     el.list.textContent = '';
     el.smallList.textContent = '';
@@ -205,8 +218,56 @@
     }
   }
 
+  // ------------------------------------------------------------------ model interpretation (S1)
+  /** What the server sent, accepted only if it looks like search terms; anything else counts as a failure. */
+  function groupsFromModel(body) {
+    if (!body || !Array.isArray(body.groups) || !body.groups.length || body.groups.length > S.MAX_GROUPS) return null;
+    const parts = [];
+    for (const g of body.groups) {
+      if (!Array.isArray(g) || !g.length || g.length > MAX_WORDS_PER_GROUP) return null;
+      if (!g.every((w) => typeof w === 'string' && MODEL_WORD.test(w))) return null;
+      parts.push(g.join('|'));
+    }
+    try {
+      return S.interpretTerms(parts.join(',')).groups;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /** Resolves to groups, or null for any failure: network, status, timeout, a damaged answer. */
+  async function askModel(query) {
+    const controller = new AbortController();
+    let timer;
+    const timeout = new Promise((resolve) => {
+      timer = setTimeout(() => { controller.abort(); resolve(null); }, MODEL_TIMEOUT_MS);
+    });
+    const ask = (async () => {
+      try {
+        const r = await fetch(state.interpretUrl, {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ q: query }),
+          signal: controller.signal, credentials: 'omit', cache: 'no-store',
+        });
+        if (!r.ok) return null;
+        return groupsFromModel(await r.json());
+      } catch (e) {
+        return null;
+      }
+    })();
+    try {
+      return await Promise.race([ask, timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  function setBusy(busy) {
+    el.form.querySelector('button').disabled = busy;
+    if (busy) announce('문장을 해석하는 중입니다.');
+  }
+
   // ------------------------------------------------------------------ actions
-  function search(text, push) {
+  async function search(text, push) {
     const query = text.trim();
     showError('');
     if (!query) {
@@ -218,12 +279,32 @@
       return;
     }
     state.limit = PAGE;
+    state.ticket += 1;
+    const ticket = state.ticket;
+    let fromModel = null;
+    if (state.interpretUrl) {
+      setBusy(true);
+      fromModel = await askModel(query);
+      if (ticket !== state.ticket) return; // a newer search or the back button took over meanwhile
+      setBusy(false);
+    }
     try {
-      const r = S.interpretPurpose(query, state.glossary);
-      state.groups = r.groups;
-      state.ignored = r.ignored;
-      state.dropped = r.dropped;
-      state.omitted = r.omitted;
+      if (fromModel) {
+        state.groups = fromModel;
+        state.ignored = [];
+        state.dropped = [];
+        state.omitted = [];
+        state.mode = 'model';
+        state.modelFailed = false;
+      } else {
+        const r = S.interpretPurpose(query, state.glossary);
+        state.groups = r.groups;
+        state.ignored = r.ignored;
+        state.dropped = r.dropped;
+        state.omitted = r.omitted;
+        state.mode = 'simple';
+        state.modelFailed = Boolean(state.interpretUrl);
+      }
       state.query = query;
       el.q.value = query;
       render({ push });
@@ -303,6 +384,8 @@
   }
 
   function restoreFromUrl() {
+    state.ticket += 1;
+    if (state.interpretUrl) setBusy(false);
     const params = new URLSearchParams(location.search);
     state.permissiveOnly = params.get('p') === '1';
     el.permissive.checked = state.permissiveOnly;
@@ -312,6 +395,8 @@
     const groups = groupsFromParam(params.get('g'));
     if (groups) {
       state.groups = groups;
+      state.mode = state.interpretUrl ? 'link' : 'simple';
+      state.modelFailed = false;
       state.query = q.slice(0, S.MAX_QUERY_LENGTH);
       state.ignored = [];
       state.dropped = [];
@@ -357,6 +442,18 @@
     el.examples.querySelectorAll('button').forEach((b) => { b.disabled = true; });
   }
 
+  /** Optional file. Without a usable address the page is exactly the glossary search. */
+  async function loadInterpretUrl() {
+    try {
+      const r = await fetch('config.json', { cache: 'no-cache' });
+      if (!r.ok) return null;
+      const url = (await r.json()).interpretUrl;
+      return typeof url === 'string' && url.length <= 200 && /^https:\/\/[^\s?#]+$/.test(url) ? url : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
   async function boot() {
     let stars;
     let glossary;
@@ -379,6 +476,8 @@
     state.meta = { user: String(stars.user || ''), count: repos.length, generated_at: String(stars.generated_at || '') };
     state.repos = repos;
     state.glossary = S.parseGlossary(glossary);
+    state.interpretUrl = await loadInterpretUrl();
+    if (state.interpretUrl) el.modelNotice.hidden = false;
     showMeta();
     bind();
     restoreFromUrl();

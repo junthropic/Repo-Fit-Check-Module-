@@ -1,0 +1,21 @@
+# Copy to wrangler.toml and fill in. Nothing here is created for you.
+#
+#   npm install
+#   npx wrangler kv namespace create S1_KV        # paste the id below
+#   npx wrangler secret put ANTHROPIC_API_KEY     # a key of its own, with a spend limit on its workspace
+#   npx wrangler deploy
+name = "star-search-interpret"
+main = "worker.mjs"
+compatibility_date = "2026-10-01"
+
+[vars]
+ALLOWED_ORIGIN = "https://junthropic.github.io"   # the origin of the page, no path
+# S1_MODEL = "claude-haiku-5-5"
+# LIMIT_PER_MINUTE = "8"
+# LIMIT_PER_DAY = "60"
+# LIMIT_DAILY_TOTAL = "1000"
+# IP_SALT = "any long random string"               # makes the stored visitor hash unguessable
+
+[[kv_namespaces]]
+binding = "S1_KV"
+id = "REPLACE_WITH_THE_NAMESPACE_ID"

@@ -1,6 +1,8 @@
 """Static checks on the page: AC-10 notice, no HTML injection paths, no third-party requests."""
+import json
 import re
 import unittest
+from urllib.parse import urlsplit
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -8,6 +10,18 @@ SITE = ROOT / "site"
 
 
 class SiteStructure(unittest.TestCase):
+    @staticmethod
+    def interpret_url():
+        return json.loads((SITE / "config.json").read_text(encoding="utf-8"))["interpretUrl"]
+
+    @classmethod
+    def interpret_origins(cls):
+        url = cls.interpret_url()
+        if url is None:
+            return []
+        parts = urlsplit(url)
+        return [f"{parts.scheme}://{parts.netloc}"]
+
     def test_ac10_notice_is_in_the_static_page(self):
         html = (SITE / "index.html").read_text(encoding="utf-8")
         self.assertIn("후보 목록이며 적합성 판정이 아닙니다", html)
@@ -50,7 +64,7 @@ class SiteStructure(unittest.TestCase):
         self.assertEqual(policy["default-src"], "'none'")
         self.assertEqual(policy["script-src"], "'self'")
         self.assertEqual(policy["style-src"], "'self'")
-        self.assertEqual(policy["connect-src"], "'self'")
+        self.assertEqual(policy["connect-src"], " ".join(["'self'"] + self.interpret_origins()))
         self.assertEqual(policy["base-uri"], "'none'")
         self.assertEqual(policy["form-action"], "'none'")
         self.assertNotIn("unsafe", m.group(1))
@@ -83,6 +97,35 @@ class SiteStructure(unittest.TestCase):
         self.assertIn("Permission is hereby granted", text)
         html = (SITE / "index.html").read_text(encoding="utf-8")
         self.assertIn("각 저장소의 사용 조건은 그 저장소의 라이선스를 따릅니다", html)
+
+    def test_the_model_endpoint_is_off_or_an_https_address_the_policy_names(self):
+        url = self.interpret_url()
+        if url is None:
+            return
+        parts = urlsplit(url)
+        self.assertEqual(parts.scheme, "https")
+        self.assertFalse(parts.query or parts.fragment or parts.username or parts.password, url)
+        self.assertLessEqual(len(url), 200)  # the page ignores longer addresses
+        self.assertNotIn("*", parts.netloc)
+
+    def test_the_page_tells_visitors_where_the_sentence_goes_when_the_model_is_on(self):
+        html = (SITE / "index.html").read_text(encoding="utf-8")
+        notice = re.search(r'<p id="notice-model"[^>]*>([^<]+)</p>', html)
+        self.assertIsNotNone(notice)
+        self.assertIn("hidden", notice.group(0).split(">")[0])  # shown by the script only when the endpoint is configured
+        for fact in ("Anthropic API", "저장하지 않고", "해시값"):
+            self.assertIn(fact, notice.group(1))
+
+    def test_files_that_hold_secrets_or_local_deploy_state_are_ignored_by_git(self):
+        lines = [l.strip() for l in (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()]
+        for name in (".dev.vars", ".env", "api/wrangler.toml", ".wrangler/"):
+            self.assertIn(name, lines)
+
+    def test_the_server_code_is_not_part_of_the_published_site(self):
+        self.assertFalse((SITE / "api").exists())
+        self.assertEqual(sorted(p.name for p in SITE.glob("*.cjs")) + sorted(p.name for p in SITE.glob("*.mjs")), [])
+        workflow = (ROOT / ".github" / "workflows" / "daily.yml").read_text(encoding="utf-8")
+        self.assertRegex(workflow, r"(?m)^          path: site\s*$")
 
     def test_results_are_not_one_big_live_region(self):
         html = (SITE / "index.html").read_text(encoding="utf-8")
@@ -120,6 +163,9 @@ class WorkflowSafety(unittest.TestCase):
         self.assertEqual(self.text.count("timeout-minutes:"), 2)
         self.assertNotIn("pull_request_target", self.text)
         self.assertNotIn("workflow_run", self.text)
+
+    def test_the_endpoint_tests_run_before_anything_is_published(self):
+        self.assertRegex(self.text, r"node --test [^\n]*tests/interpret-api\.test\.js")
 
     def test_an_empty_list_cannot_be_deployed(self):
         self.assertIn('--min-count "$MIN_COUNT"', self.text)

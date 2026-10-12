@@ -45,12 +45,15 @@ class El {
 }
 
 /** Boots app.js with the given stars.json content and URL query string. Returns handles to inspect. */
-async function boot({ stars, search = '', fetchFails = false, protocol = 'http:', clockMs }) {
+async function boot({ stars, search = '', fetchFails = false, protocol = 'http:', clockMs, config, model }) {
   const doc = { active: null, byId: {} };
   [...html.matchAll(/id="([^"]+)"/g)].forEach((m) => {
     const tag = ['search-form', 'add-form'].includes(m[1]) ? 'form' : ['more', 'permissive'].includes(m[1]) ? 'button' : 'div';
     const e = new El(tag, m[1]);
     e.doc = doc;
+    // elements that start hidden in the page start hidden here too
+    const openTag = html.slice(html.lastIndexOf('<', m.index), html.indexOf('>', m.index) + 1);
+    e.hidden = /\shidden[\s>]/.test(openTag);
     doc.byId[m[1]] = e;
   });
   const submitButton = new El('button', 'submit');
@@ -73,8 +76,13 @@ async function boot({ stars, search = '', fetchFails = false, protocol = 'http:'
   };
   const windowListeners = {};
   const window = { StarSearch: S, addEventListener: (t, f) => { windowListeners[t] = f; } };
-  const fetch = async (url) => {
+  const fetch = async (url, init) => {
     if (fetchFails) throw new Error('offline');
+    if (url === 'config.json') {
+      if (config === undefined) return { ok: false, status: 404, json: async () => { throw new Error('no body'); } };
+      return { ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(config)) };
+    }
+    if (model && config && url === config.interpretUrl) return model(url, init);
     const body = url === 'stars.json' ? stars : glossary;
     return { ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(body)) };
   };
@@ -84,7 +92,10 @@ async function boot({ stars, search = '', fetchFails = false, protocol = 'http:'
     constructor(...a) { if (a.length === 0) super(baseNow); else super(...a); }
     static now() { return baseNow; }
   }
-  const sandbox = { window, document: doc, location, history, fetch, URLSearchParams, Date: FakeDate, Number, Math, String, Array, Boolean, Promise, JSON };
+  // the page waits 3 seconds for the model; the test clock runs it a hundred times faster
+  const fastTimeout = (f, ms) => setTimeout(f, ms / 100);
+  const sandbox = { window, document: doc, location, history, fetch, URLSearchParams, Date: FakeDate, Number, Math, String, Array, Boolean, Promise, JSON,
+    AbortController, setTimeout: fastTimeout, clearTimeout };
   vm.runInNewContext(appSource, vm.createContext(sandbox));
   for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
   const $ = (id) => doc.byId[id];
@@ -93,6 +104,7 @@ async function boot({ stars, search = '', fetchFails = false, protocol = 'http:'
     cards: () => $('list').children,
     chipWords: () => $('chips').children.map((li) => li.children[0].textContent),
     submit: (text) => { $('q').value = text; $('search-form').dispatch('submit'); },
+    settle: (ms = 80) => new Promise((r) => setTimeout(r, ms)),
   };
 }
 
@@ -268,4 +280,142 @@ test('the same search twice leaves one history entry, and a failed search leaves
   assert.strictEqual(pushes(), 1);
   app.submit('가나다라마바사');
   assert.strictEqual(pushes(), 1);
+});
+
+
+// ---------------------------------------------------------------- S1: the model reads the sentence
+const MODEL_URL = 'https://interpret.example/interpret';
+const answers = (groups) => async () => ({ ok: true, status: 200, json: async () => ({ groups, source: 'model' }) });
+const withModel = (model, extra) => Object.assign({ stars: snapshot(pdfPool(12)), config: { interpretUrl: MODEL_URL }, model }, extra);
+
+test('with an endpoint the sentence is sent as data, the model groups become the chips, and the page says so', async () => {
+  const sent = [];
+  const app = await boot(withModel(async (url, init) => { sent.push([url, init]); return answers([['pdf'], ['translation', 'translate']])(); }));
+  assert.strictEqual(app.$('notice-model').hidden, false);
+  app.submit('PDF 문서를 번역하고 싶어');
+  await app.settle();
+  assert.strictEqual(sent.length, 1);
+  assert.strictEqual(sent[0][1].method, 'POST');
+  assert.strictEqual(sent[0][1].credentials, 'omit');
+  assert.deepStrictEqual(JSON.parse(sent[0][1].body), { q: 'PDF 문서를 번역하고 싶어' });
+  assert.deepStrictEqual(app.chipWords(), ['pdf', 'translation | translate']);
+  assert.match(app.$('notice-interpret').textContent, /AI가 문장을 검색어로 풀어/);
+  assert.match(app.location.search, /g=pdf%2Ctranslation%7Ctranslate/);
+  assert.ok(app.cards().length > 0);
+});
+
+test('while the model works the search button is off and the status says so; afterwards it is back', async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const app = await boot(withModel(async () => { await gate; return answers([['pdf']])(); }));
+  app.submit('pdf');
+  await app.settle(5);
+  assert.strictEqual(app.$('search-form').querySelector('button').disabled, true);
+  assert.match(app.$('status').textContent, /해석하는 중/);
+  release();
+  await app.settle();
+  assert.strictEqual(app.$('search-form').querySelector('button').disabled, false);
+});
+
+test('every kind of model failure falls back to the glossary and says it was the simple interpretation', async () => {
+  const failures = {
+    'server error': async () => ({ ok: false, status: 502, json: async () => ({}) }),
+    'rate limit': async () => ({ ok: false, status: 429, json: async () => ({}) }),
+    'error status with a good-looking body': async () => ({ ok: false, status: 500, json: async () => ({ groups: [['x']] }) }),
+    'network': async () => { throw new Error('offline'); },
+    'not json': async () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError('x'); } }),
+    'never answers': () => new Promise(() => {}),
+  };
+  for (const [name, model] of Object.entries(failures)) {
+    const app = await boot(withModel(model));
+    app.submit('pdf translation');
+    await app.settle(120);
+    assert.deepStrictEqual(app.chipWords(), ['pdf', 'translation'], name);
+    assert.match(app.$('notice-interpret').textContent, /AI로 해석하지 못해 간이 해석으로 검색했습니다/, name);
+    assert.strictEqual(app.$('search-form').querySelector('button').disabled, false, name);
+  }
+});
+
+test('an answer that does not look like search terms is not trusted, whatever the server says', async () => {
+  const bad = [
+    null, [], { groups: 'pdf' }, { groups: [] }, { groups: [[]] }, { groups: [['pdf', 7]] }, { groups: [['한국']] },
+    { groups: [['two words']] }, { groups: [['a,b']] }, { groups: [['a|b']] }, { groups: [['<img src=x>']] },
+    { groups: [['x'.repeat(41)]] }, { groups: Array.from({ length: 7 }, (_, i) => ['w' + i]) },
+    { groups: [Array.from({ length: 9 }, (_, i) => 'w' + i)] },
+  ];
+  for (const body of bad) {
+    const app = await boot(withModel(async () => ({ ok: true, status: 200, json: async () => body })));
+    app.submit('pdf translation');
+    await app.settle();
+    assert.deepStrictEqual(app.chipWords(), ['pdf', 'translation'], JSON.stringify(body));
+    assert.match(app.$('notice-interpret').textContent, /간이 해석/, JSON.stringify(body));
+  }
+});
+
+test('an old answer cannot overwrite a newer search', async () => {
+  const slow = [];
+  const app = await boot(withModel(async (_url, init) => {
+    const q = JSON.parse(init.body).q;
+    if (q === 'first') { await new Promise((r) => slow.push(r)); return answers([['stale']])(); }
+    return answers([['pdf']])();
+  }));
+  app.submit('first');
+  await app.settle(5);
+  app.submit('second');
+  await app.settle();
+  assert.deepStrictEqual(app.chipWords(), ['pdf']);
+  slow.forEach((r) => r());
+  await app.settle();
+  assert.deepStrictEqual(app.chipWords(), ['pdf']);
+  assert.strictEqual(app.$('q').value, 'second');
+});
+
+test('the back button during a model call cancels it: the old search is restored and the late answer is dropped', async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const app = await boot(withModel(async () => { await gate; return answers([['late']])(); }));
+  app.submit('something');
+  await app.settle(5);
+  app.location.search = '?g=pdf,translation';
+  app.popstate();
+  release();
+  await app.settle();
+  assert.deepStrictEqual(app.chipWords(), ['pdf', 'translation']);
+  assert.strictEqual(app.$('search-form').querySelector('button').disabled, false);
+});
+
+test('a shared link with search terms does not ask the model again and is labelled as a link', async () => {
+  let asked = 0;
+  const app = await boot(withModel(async () => { asked += 1; return answers([['x']])(); }, { search: '?q=pdf+translation&g=pdf,translation' }));
+  await app.settle();
+  assert.strictEqual(asked, 0);
+  assert.deepStrictEqual(app.chipWords(), ['pdf', 'translation']);
+  assert.match(app.$('notice-interpret').textContent, /링크에 담긴 검색어/);
+});
+
+test('chips can still be removed and added after the model has answered', async () => {
+  const app = await boot(withModel(answers([['pdf'], ['translation']])));
+  app.submit('pdf translation');
+  await app.settle();
+  app.$('add-input').value = 'ocr';
+  app.$('add-form').dispatch('submit');
+  assert.deepStrictEqual(app.chipWords(), ['pdf', 'translation', 'ocr']);
+  app.$('chips').children[0].children[1].listeners.click[0]();
+  assert.deepStrictEqual(app.chipWords(), ['translation', 'ocr']);
+});
+
+test('only an https address is used; anything else leaves the page as it was, with no request and no notice', async () => {
+  const addresses = ['http://interpret.example/x', 'javascript:alert(1)', '//interpret.example/x', 'https://a b.example', 'https://x.example/?q=1',
+    'https://x.example/#f', 5, null, '', 'https://x.example/' + 'a'.repeat(200), 'data:text/plain,hi'];
+  for (const interpretUrl of addresses) {
+    const app = await boot({ stars: snapshot(pdfPool(12)), config: { interpretUrl }, model: async () => { throw new Error('must not be called'); } });
+    app.submit('pdf translation');
+    assert.strictEqual(app.$('notice-model').hidden, true, String(interpretUrl));
+    assert.deepStrictEqual(app.chipWords(), ['pdf', 'translation'], String(interpretUrl));
+    assert.match(app.$('notice-interpret').textContent, /^간이 해석으로 검색했습니다/, String(interpretUrl));
+  }
+  const missing = await boot({ stars: snapshot(pdfPool(12)) }); // no config.json at all
+  missing.submit('pdf translation');
+  assert.strictEqual(missing.$('notice-model').hidden, true);
+  assert.deepStrictEqual(missing.chipWords(), ['pdf', 'translation']);
 });

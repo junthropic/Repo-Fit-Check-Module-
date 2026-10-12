@@ -60,7 +60,7 @@ jobs:
         run: python3 scripts/build_snapshot.py --user "$STAR_USER" --min-count "$MIN_COUNT"
 
       - name: JavaScript tests
-        run: node --test tests/search.test.js tests/app.test.js
+        run: node --test tests/search.test.js tests/app.test.js tests/interpret-api.test.js
 
       - name: Python tests (snapshot, site structure, parity with the skill)
         run: python3 -m unittest discover -s tests
