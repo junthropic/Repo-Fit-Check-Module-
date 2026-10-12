@@ -11,7 +11,7 @@ const input = JSON.parse(fs.readFileSync(0, 'utf8'));
 if (input.constants) {
   process.stdout.write(JSON.stringify({
     stopwords: [...S.STOPWORDS].sort(), generic: [...S.GENERIC].sort(), singleLetterOk: [...S.SINGLE_LETTER_OK].sort(),
-    minRel: S.MIN_REL, maxGroups: S.MAX_GROUPS,
+    minRel: S.MIN_REL, maxGroups: S.MAX_GROUPS, permissive: [...S.PERMISSIVE].sort(),
   }));
   process.exit(0);
 }

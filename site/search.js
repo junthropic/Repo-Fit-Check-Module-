@@ -270,7 +270,8 @@
     const lic = licenseStatus(repo.license, allowed, avoid);
     const licScore = { ok: 1.0, unknown: 0.5, mismatch: 0.0, blocked: 0.0 }[lic];
     let final = 0.70 * rel + 0.10 * pop + 0.15 * activity(days) + 0.05 * licScore;
-    if (lic === 'mismatch') final *= 0.6;
+    // with a list of allowed licenses, "unknown" is no safer than a license that is not on the list
+    if (lic === 'mismatch' || (lic === 'unknown' && allowed.length)) final *= 0.6;
     return Object.assign({}, repo, {
       rel: round3(rel), pop: round3(pop), days, lic_status: lic, score: round3(final), why,
     });

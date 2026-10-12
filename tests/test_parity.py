@@ -42,6 +42,8 @@ CASES = [
     {"terms": "korea|korean, law|statute"},
     {"terms": "labor|employment, compliance", "allowed": ["MIT", "Apache-2.0"], "avoid": ["AGPL", "GPL"]},
     {"terms": "pdf, translate|translation|translator"},
+    {"terms": "labor, law", "allowed": ["MIT"]},  # unknown and unlisted licenses are both penalised
+    {"terms": "labor, law", "allowed": D.PERMISSIVE, "avoid": ["GPL"]},
     {"terms": "mcp-server, search"},
     {"terms": "노동, law"},
     # what the audit found: English sentences, filler, odd characters, absent words, short words
@@ -188,6 +190,7 @@ class Parity(unittest.TestCase):
         self.assertEqual(consts["generic"], sorted(D.GENERIC))
         self.assertEqual(consts["singleLetterOk"], sorted(D.SINGLE_LETTER_OK))
         self.assertEqual((consts["minRel"], consts["maxGroups"]), (D.MIN_REL, D.MAX_GROUPS))
+        self.assertEqual(consts["permissive"], sorted(x.upper() for x in D.PERMISSIVE))
 
     def test_ties_keep_input_order(self):
         repos = make_fixture()
