@@ -44,6 +44,30 @@ CASES = [
     {"terms": "pdf, translate|translation|translator"},
     {"terms": "mcp-server, search"},
     {"terms": "노동, law"},
+    # what the audit found: English sentences, filler, odd characters, absent words, short words
+    {"purpose": "I am looking for a tool that can help me translate PDF documents into Korean"},
+    {"purpose": "Can you find me a good MCP server for searching the web?"},
+    {"purpose": "3D printing"},
+    {"purpose": "C# parser"},
+    {"purpose": "R language"},
+    {"purpose": "law. labor."},
+    {"purpose": "pdf please xyzzy"},
+    {"purpose": "as is its news ios js"},
+    {"purpose": "alpha beta gamma delta epsilon zeta eta theta"},
+    {"purpose": "PDF 번역 도구"},
+    {"purpose": "인사이트 분석 도구"},
+    {"purpose": "pdf 렌더링"},
+    {"purpose": "노무현 연설문"},
+    {"purpose": "labor" + chr(0x1c) + "law"},
+    {"purpose": chr(0xfeff) + "labor law" + chr(0x85)},
+    {"terms": "law|law, law"},
+    {"terms": "pdf, translation, xyzzy"},
+    {"terms": "as, is"},
+    {"terms": "a,b,c,d,e,f,g,h"},
+    {"terms": "law," + chr(0x1c)},
+    {"terms": "law," + chr(0xfeff)},
+    {"terms": "law," + chr(0x85)},
+    {"terms": "  ,  "},
 ]
 
 VOCAB = ["korea", "korean", "labor", "labour", "law", "laws", "statute", "compliance", "check", "checker", "audit",
@@ -86,15 +110,17 @@ def run_python(repos, cases):
     out = []
     for c in cases:
         try:
-            groups = D.parse_terms(c.get("terms"), c.get("purpose"), GLOSSARY_FOR_PY)
+            interpretation = D.interpret(c.get("terms"), c.get("purpose"), GLOSSARY_FOR_PY)
         except ValueError as e:
             out.append({"error": "non_ascii" if str(e).startswith("non-English") else "no_terms"})
             continue
-        scored, excluded = D.rank(repos, groups, c.get("allowed", []), c.get("avoid", []), min_rel=0.34, now=NOW)
+        groups = interpretation["groups"]
+        scored, excluded = D.rank(repos, groups, c.get("allowed", []), c.get("avoid", []), min_rel=D.MIN_REL, now=NOW)
         main, small = D.select(scored, 10)
         pick = lambda r: {k: r[k] for k in ("full_name", "rel", "pop", "days", "lic_status", "score", "why")}
-        out.append({"groups": groups, "main": [pick(r) for r in main], "small": [pick(r) for r in small],
-                    "scored": len(scored), "excluded": len(excluded)})
+        out.append({"groups": groups, "dropped": interpretation["dropped"], "ignored": interpretation["ignored"],
+                    "main": [pick(r) for r in main], "small": [pick(r) for r in small],
+                    "scored": len(scored), "excluded": len(excluded), "unmatched": D.unmatched_groups(repos, groups)})
     return out
 
 
@@ -120,6 +146,7 @@ class Parity(unittest.TestCase):
                     self.assertEqual(a, b)
                     continue
                 self.assertEqual(a["groups"], b["groups"])
+                self.assertEqual((a["dropped"], a["ignored"], a["unmatched"]), (b["dropped"], b["ignored"], b["unmatched"]))
                 self.assertEqual((a["scored"], a["excluded"]), (b["scored"], b["excluded"]))
                 for part in ("main", "small"):
                     self.assertEqual([r["full_name"] for r in a[part]], [r["full_name"] for r in b[part]])
@@ -133,6 +160,34 @@ class Parity(unittest.TestCase):
         py = run_python(repos, CASES)
         self.assertTrue(any(c.get("main") for c in py), "fixture produced no results; the test would prove nothing")
         self.compare(repos, "synthetic")
+
+    def test_odd_push_dates_are_handled_the_same(self):
+        odd = ["2026-10-01", "2026-10-01T00:00:00", "bad", "2026-13-45T00:00:00Z", "2026-02-30T00:00:00Z",
+               "2026-01-01T24:00:00Z", "2026-10-01T00:00:60Z", "0001-01-01T00:00:00Z", "2099-01-01T00:00:00Z",
+               "2026-10-01T00:00:00Z\n", "2024-02-29T12:00:00Z"]
+        repos = [{"full_name": f"odd/labor-law-{i}", "description": "labor law", "stars": 10 + i, "pushed_at": d,
+                  "license": "MIT", "archived": False, "fork": False, "language": None, "topics": []}
+                 for i, d in enumerate(odd)]
+        cases = [{"terms": "labor, law"}]
+        py, js = run_python(repos, cases)[0], run_js(repos, cases)[0]
+        self.assertEqual([r["days"] for r in py["main"]], [r["days"] for r in js["main"]])
+        self.assertEqual([r["full_name"] for r in py["main"]], [r["full_name"] for r in js["main"]])
+        by_name = {r["full_name"]: r["days"] for r in py["main"] + py["small"]}
+        for i in (0, 1, 2, 3, 4, 5, 6, 7, 9):
+            self.assertEqual(by_name[f"odd/labor-law-{i}"], 9999, odd[i])  # not a valid GitHub timestamp: no date
+        self.assertEqual(by_name["odd/labor-law-8"], 0)  # a date in the future is "today", not an error
+
+    def test_shared_constants_are_identical(self):
+        js = run_js([], [])  # warm-up: node starts and handles an empty case list
+        self.assertEqual(js, [])
+        payload = json.dumps({"constants": True})
+        p = subprocess.run(["node", str(ROOT / "tests" / "run_js.js")], input=payload, capture_output=True,
+                           text=True, encoding="utf-8")
+        consts = json.loads(p.stdout)
+        self.assertEqual(consts["stopwords"], sorted(D.STOPWORDS))
+        self.assertEqual(consts["generic"], sorted(D.GENERIC))
+        self.assertEqual(consts["singleLetterOk"], sorted(D.SINGLE_LETTER_OK))
+        self.assertEqual((consts["minRel"], consts["maxGroups"]), (D.MIN_REL, D.MAX_GROUPS))
 
     def test_ties_keep_input_order(self):
         repos = make_fixture()

@@ -6,11 +6,14 @@
   const $ = (id) => document.getElementById(id);
   const FULL_NAME = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
-  const state = { repos: [], meta: null, glossary: {}, groups: null, query: '', permissiveOnly: false };
+  const state = {
+    repos: [], meta: null, glossary: {}, groups: null, query: '', permissiveOnly: false,
+    ignored: [], dropped: [],
+  };
   const el = {
     app: $('app'), form: $('search-form'), q: $('q'), examples: $('examples'), results: $('results'),
     chips: $('chips'), addForm: $('add-form'), addInput: $('add-input'), permissive: $('permissive'),
-    interpret: $('notice-interpret'), summary: $('summary'), message: $('message'), list: $('list'),
+    interpret: $('notice-interpret'), notes: $('notes'), summary: $('summary'), message: $('message'), list: $('list'),
     smallBox: $('small-box'), smallList: $('small-list'), error: $('error'), meta: $('meta'),
   };
 
@@ -95,6 +98,22 @@
     });
   }
 
+  /** What the search left out, so a word never disappears without a trace. */
+  function renderNotes(unmatched) {
+    const lines = [];
+    if (state.ignored.length) {
+      lines.push('해석하지 못한 한국어: ' + state.ignored.join(', ') + ' (영어 단어로 추가하면 검색에 쓰입니다)');
+    }
+    if (state.dropped.length) {
+      lines.push('검색어는 ' + S.MAX_GROUPS + '개까지 쓰므로 뺀 것: ' + state.dropped.map((g) => g[0]).join(', '));
+    }
+    if (unmatched.length) {
+      lines.push('스타 목록 어디에도 없어 점수에서 뺀 단어: ' + unmatched.map((g) => g[0]).join(', '));
+    }
+    el.notes.textContent = lines.join(' · ');
+    el.notes.hidden = !lines.length;
+  }
+
   function render() {
     updateUrl();
     el.app.classList.toggle('home', !state.groups);
@@ -109,6 +128,7 @@
     el.smallBox.hidden = true;
 
     if (!state.groups.length) {
+      renderNotes([]);
       el.summary.textContent = '';
       el.message.textContent = '검색어가 없습니다. 아래 입력칸에 영어 단어를 추가해 주세요. 예: korea, law';
       el.message.hidden = false;
@@ -116,6 +136,7 @@
     }
 
     const r = S.runSearch(state.repos, state.groups, { permissiveOnly: state.permissiveOnly, now: new Date() });
+    renderNotes(r.unmatched);
     el.summary.textContent = '스타 ' + r.poolSize + '개 중 관련 후보 ' + r.shown + '개'
       + (r.shown > r.main.length ? ' (상위 ' + r.main.length + '개 표시)' : '');
 
@@ -149,7 +170,10 @@
       return;
     }
     try {
-      state.groups = S.parsePurpose(query, state.glossary);
+      const r = S.interpretPurpose(query, state.glossary);
+      state.groups = r.groups;
+      state.ignored = r.ignored;
+      state.dropped = r.dropped;
       state.query = query;
       el.q.value = query;
       render();
@@ -157,15 +181,20 @@
       if (!(e instanceof S.QueryError)) throw e;
       state.groups = null;
       state.query = '';
+      state.ignored = [];
+      state.dropped = [];
       render();
-      showError('용어집에 있는 단어도 영어 단어도 찾지 못했습니다. 영어 키워드를 함께 적어 보세요. 예: korea labor law');
+      const unknown = e.message.includes('Not understood') ? ' 알아듣지 못한 단어: ' + e.message.split('Not understood: ')[1] + '.' : '';
+      showError('용어집에 있는 단어도 영어 단어도 찾지 못했습니다.' + unknown + ' 영어 키워드를 함께 적어 보세요. 예: korea labor law');
     }
   }
 
   function addTerms(text) {
     showError('');
     try {
-      state.groups = state.groups.concat(S.parseTermsArg(text));
+      const merged = S.mergeGroups(state.groups, S.parseTermsArg(text));
+      state.groups = merged.groups;
+      state.dropped = merged.dropped;
       el.addInput.value = '';
       render();
     } catch (e) {

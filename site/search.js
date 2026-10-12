@@ -10,15 +10,38 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  const STOPWORDS = new Set(['a', 'an', 'the', 'and', 'or', 'for', 'of', 'to', 'in', 'on', 'with', 'my', 'our',
-    'tool', 'tools', 'that', 'this', 'using', 'use', 'app', 'project']);
+  // Filler words of English sentences. Identical to STOPWORDS in discover.py.
+  const STOPWORDS = new Set([
+    'a', 'an', 'the', 'and', 'or', 'for', 'of', 'to', 'in', 'on', 'with', 'my', 'our', 'tool', 'tools',
+    'that', 'this', 'using', 'use', 'app', 'project',
+    'i', 'am', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'can', 'could', 'would', 'should', 'will',
+    'shall', 'may', 'might', 'must', 'do', 'does', 'did', 'you', 'your', 'yours', 'me', 'we', 'us', 'it', 'its',
+    'they', 'them', 'their', 'he', 'she', 'his', 'her', 'find', 'finding', 'looking', 'look', 'help', 'helps',
+    'want', 'wants', 'need', 'needs', 'good', 'best', 'better', 'some', 'any', 'something', 'anything',
+    'please', 'like', 'how', 'what', 'which', 'who', 'whom', 'where', 'when', 'why', 'get', 'gets', 'make',
+    'makes', 'have', 'has', 'had', 'into', 'from', 'by', 'at', 'as', 'about', 'than', 'then', 'so', 'if', 'not',
+    'no', 'but', 'all', 'more', 'most', 'very', 'also', 'just', 'there', 'here', 'used', 'one', 'own', 'up',
+    'out', 'over', 'too', 'such', 'these', 'those', 'other', 'another',
+  ]);
   const GENERIC = new Set(['platform', 'system', 'service', 'program', 'software', 'solution', 'application',
     'management']);
+  const SINGLE_LETTER_OK = new Set(['c', 'r']); // language names; any other one-letter word is noise
   const FIELD_WEIGHT = [['name', 1.0], ['topics', 0.9], ['description', 0.7]];
   const PERMISSIVE = new Set(['MIT', 'APACHE-2.0', 'BSD-3-CLAUSE', 'BSD-2-CLAUSE', 'ISC', 'UNLICENSE', 'CC0-1.0', '0BSD']);
   const MIN_REL = 0.34;
   const MAX_GROUPS = 6;
   const MAX_QUERY_LENGTH = 200;
+
+  // One definition of "blank", identical to SPACE in discover.py. String.trim() and Python's strip()
+  // disagree on U+001C-001F, U+0085 and U+FEFF, which made the two implementations rank differently.
+  const SPACE_RANGES = [[0x0, 0x20], [0x7f, 0xa0], [0x1680], [0x180e], [0x2000, 0x200b], [0x2028], [0x2029],
+    [0x202f], [0x205f], [0x3000], [0xfeff]];
+  const SPACE = new RegExp('[' + SPACE_RANGES
+    .map((r) => r.map((c) => String.fromCharCode(c)).join('-')).join('') + ']+', 'g');
+  // English word as a visitor writes it: 3D, C#, C++, node.js, open-source; no trailing punctuation.
+  const TERM_SOURCE = '[A-Za-z0-9][A-Za-z0-9+#]*(?:[-.][A-Za-z0-9+#]+)*';
+  // GitHub's timestamp format. Anything else counts as "no push date", never as an error.
+  const ISO_Z = /^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})Z$/;
 
   class QueryError extends Error {
     constructor(code, message) {
@@ -34,6 +57,10 @@
     return /[^\x00-\x7f]/.test(text);
   }
 
+  function normalizeSpace(text) {
+    return String(text == null ? '' : text).replace(SPACE, ' ').replace(/^ +| +$/g, '');
+  }
+
   function parseGlossary(raw) {
     const out = {};
     Object.keys(raw || {}).forEach((k) => {
@@ -42,52 +69,90 @@
     return out;
   }
 
-  function finishGroups(groups) {
+  /** Drop repeated words inside a group and groups with the same word set (they would count twice). */
+  function dedupeGroups(groups) {
+    const seen = new Set();
+    const out = [];
+    groups.forEach((g0) => {
+      const g = Array.from(new Set(g0));
+      const key = JSON.stringify(g.slice().sort());
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push(g);
+      }
+    });
+    return out;
+  }
+
+  function finish(groups0, ignored) {
+    const groups = dedupeGroups(groups0);
     const bad = groups.flat().filter(hasNonAscii);
     if (bad.length) {
       throw new QueryError('non_ascii', 'Non-English terms need translation: ' + bad.join(', '));
     }
     if (!groups.length) {
-      throw new QueryError('no_terms', 'No usable search terms.');
+      throw new QueryError('no_terms', 'No usable search terms.' + (ignored.length ? ' Not understood: ' + ignored.join(', ') : ''));
     }
-    return groups.slice(0, MAX_GROUPS);
+    return { groups: groups.slice(0, MAX_GROUPS), dropped: groups.slice(MAX_GROUPS), ignored };
   }
 
   /** Explicit terms, e.g. "labor|employment, law|statute, compliance" (what the chips hold). */
-  function parseTermsArg(arg) {
+  function interpretTerms(arg) {
     const groups = [];
-    String(arg || '').split(',').forEach((part) => {
-      const words = part.split('|').map((w) => w.trim().toLowerCase()).filter(Boolean);
+    normalizeSpace(arg).split(',').forEach((part) => {
+      const words = part.split('|').map((w) => w.replace(/^ +| +$/g, '').toLowerCase()).filter(Boolean);
       if (words.length) groups.push(words);
     });
-    return finishGroups(groups);
+    return finish(groups, []);
   }
 
-  /** Free text. Korean words the glossary knows become English synonym groups; English words pass through. */
-  function parsePurpose(text, glossary) {
-    const purpose = String(text || '');
+  /** Free text. Korean words the glossary knows become English synonym groups; English words pass through.
+   *  Returns {groups, dropped (cut because only MAX_GROUPS are used), ignored (Korean words not understood)}. */
+  function interpretPurpose(text0, glossary) {
+    const text = normalizeSpace(text0);
     const used = [];
     const found = [];
     Object.entries(glossary || {})
       .sort((a, b) => b[0].length - a[0].length)
       .forEach(([ko, en]) => {
-        if (purpose.includes(ko) && !used.some((u) => ko.includes(u) || u.includes(ko))) {
+        if (text.includes(ko) && !used.some((u) => ko.includes(u) || u.includes(ko))) {
           used.push(ko);
           // an empty value means "ignore this word" (방법 must not trigger 법)
-          if (en) found.push([purpose.indexOf(ko), en.split('|').map((w) => w.toLowerCase())]);
+          if (en) found.push([text.indexOf(ko), en.split('|').map((w) => w.toLowerCase())]);
         }
       });
-    const re = /[A-Za-z][A-Za-z0-9\-.]+/g;
+    const re = new RegExp(TERM_SOURCE, 'g');
     let m;
-    while ((m = re.exec(purpose)) !== null) {
+    while ((m = re.exec(text)) !== null) {
       const w = m[0].toLowerCase();
-      if (!STOPWORDS.has(w) && !found.some(([, g]) => g.includes(w))) found.push([m.index, [w]]);
+      if (STOPWORDS.has(w) || /^[0-9]+$/.test(w) || (w.length < 2 && !SINGLE_LETTER_OK.has(w))) continue;
+      if (!found.some(([, g]) => g.includes(w))) found.push([m.index, [w]]);
     }
     const groups = found
       .sort((a, b) => a[0] - b[0])
       .map(([, g]) => g)
       .filter((g) => !g.every((w) => GENERIC.has(w)));
-    return finishGroups(groups);
+    let rest = text;
+    used.forEach((ko) => { rest = rest.split(ko).join(' '); });
+    rest = rest.replace(new RegExp(TERM_SOURCE, 'g'), ' ');
+    const ignored = [];
+    (rest.match(/\p{L}+/gu) || []).forEach((w) => {
+      if (w.length >= 2 && !ignored.includes(w)) ignored.push(w);
+    });
+    return finish(groups, ignored);
+  }
+
+  const parseTermsArg = (arg) => interpretTerms(arg).groups;
+  const parsePurpose = (text, glossary) => interpretPurpose(text, glossary).groups;
+
+  /** Chips added by the visitor: merge, keep at most MAX_GROUPS. A new chip whose words are all already
+   *  in an existing chip (typing "law" next to "law|statute|legal") adds nothing and is skipped. */
+  function mergeGroups(existing, added) {
+    const all = dedupeGroups(existing).slice();
+    dedupeGroups(added).forEach((g) => {
+      if (!all.some((e) => g.every((w) => e.includes(w)))) all.push(g);
+    });
+    return { groups: all.slice(0, MAX_GROUPS), dropped: all.slice(MAX_GROUPS) };
   }
 
   // ---------------------------------------------------------------- scoring
@@ -98,7 +163,8 @@
   function wordIn(word, toks) {
     const parts = String(word).toLowerCase().match(/[a-z0-9]+/g) || [];
     if (!parts.length) return false;
-    const has = (p) => toks.has(p) || toks.has(p + 's') || (p.endsWith('s') && toks.has(p.slice(0, -1)));
+    // singular <- plural only for longer words: 'as'->'a', 'its'->'it', 'news'->'new' are not plurals
+    const has = (p) => toks.has(p) || toks.has(p + 's') || (p.length >= 5 && p.endsWith('s') && toks.has(p.slice(0, -1)));
     return parts.every(has);
   }
 
@@ -127,17 +193,29 @@
     return { scores, wheres };
   }
 
-  /** Rarer term groups in the pool discriminate more ('korea' over 'compliance'). */
-  function idfWeights(repos, groups) {
-    const n = repos.length;
-    if (n < 10) return groups.map(() => 1.0);
+  function documentFrequencies(repos, groups) {
     const df = groups.map(() => 0);
     repos.forEach((r) => {
       groupScores(r, groups).scores.forEach((s, i) => {
         if (s > 0) df[i] += 1;
       });
     });
-    return df.map((d) => Math.log(1 + n / (d + 1)));
+    return df;
+  }
+
+  /** Rarer term groups in the pool discriminate more ('korea' over 'compliance').
+   *  A group no repository matches gets weight 0, so an absent filler word cannot become the most important one. */
+  function idfWeights(repos, groups) {
+    const n = repos.length;
+    if (n < 10) return groups.map(() => 1.0);
+    return documentFrequencies(repos, groups).map((d) => (d > 0 ? Math.log(1 + n / (d + 1)) : 0.0));
+  }
+
+  /** Groups that no repository in the (live) pool matches; they were left out of the scoring. */
+  function unmatchedGroups(repos, groups) {
+    const live = repos.filter((r) => !(r.archived || r.fork));
+    if (live.length < 10) return [];
+    return documentFrequencies(live, groups).map((d, i) => (d === 0 ? groups[i] : null)).filter(Boolean);
   }
 
   function relevance(repo, groups, weights) {
@@ -149,8 +227,9 @@
       num += w[i] * s;
       den += w[i];
     });
-    let rel = num / den;
-    if (scores.every((s) => s > 0)) rel = Math.min(1.0, rel + 0.1);
+    let rel = den > 0 ? num / den : 0.0;
+    const active = scores.filter((s, i) => w[i] > 0);
+    if (active.length && active.every((s) => s > 0)) rel = Math.min(1.0, rel + 0.1);
     const why = [];
     groups.forEach((g, i) => {
       if (wheres[i]) why.push(g[0] + '<-' + wheres[i]);
@@ -158,10 +237,17 @@
     return { rel, why };
   }
 
+  /** Days since the push. A date that is not GitHub's YYYY-MM-DDTHH:MM:SSZ counts as "no date". */
   function daysSince(iso, now) {
-    if (!iso) return 9999;
-    const ms = now.getTime() - Date.parse(iso);
-    return Math.max(0, Math.floor(ms / 86400000));
+    const m = typeof iso === 'string' ? ISO_Z.exec(iso) : null;
+    if (!m) return 9999;
+    const [y, mo, d, h, mi, s] = m.slice(1).map(Number);
+    if (y < 1970 || mo < 1 || mo > 12 || d < 1 || h > 23 || mi > 59 || s > 59) return 9999;
+    const leap = y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0);
+    const daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mo - 1];
+    if (d > daysInMonth) return 9999;
+    const ms = Date.UTC(y, mo - 1, d, h, mi, s);
+    return Math.max(0, Math.floor((now.getTime() - ms) / 86400000));
   }
 
   function activity(days) {
@@ -239,6 +325,7 @@
       groups, main, small,
       poolSize: repos.length, kept: scored.length, shown: visible.length,
       excludedCount: excluded.length, hiddenByLicense: scored.length - visible.length,
+      unmatched: unmatchedGroups(repos, groups),
       empty: main.length === 0,
     };
   }
@@ -261,9 +348,10 @@
   }
 
   return {
-    QueryError, STOPWORDS, GENERIC, PERMISSIVE, MIN_REL, MAX_QUERY_LENGTH,
-    parseGlossary, parseTermsArg, parsePurpose,
-    tokens, wordIn, groupScores, idfWeights, relevance, daysSince, activity, licenseStatus, scoreRepo,
-    rank, select, runSearch, isPermissive, licenseBadge, whyLabel,
+    QueryError, STOPWORDS, GENERIC, SINGLE_LETTER_OK, PERMISSIVE, MIN_REL, MAX_GROUPS, MAX_QUERY_LENGTH,
+    parseGlossary, normalizeSpace, dedupeGroups, interpretTerms, interpretPurpose, parseTermsArg, parsePurpose,
+    mergeGroups,
+    tokens, wordIn, groupScores, documentFrequencies, idfWeights, unmatchedGroups, relevance, daysSince, activity,
+    licenseStatus, scoreRepo, rank, select, runSearch, isPermissive, licenseBadge, whyLabel,
   };
 });

@@ -106,3 +106,79 @@ test('matched fields are labelled in Korean', () => {
 test('query length limit is 200', () => {
   assert.strictEqual(S.MAX_QUERY_LENGTH, 200);
 });
+
+// ---- sentence handling (bundle 1 of the audit) ----------------------------------------------
+const words = (text) => S.interpretPurpose(text, glossary).groups.map((g) => g[0]);
+
+test('English filler does not use up the term slots', () => {
+  assert.deepStrictEqual(words('I am looking for a tool that can help me translate PDF documents into Korean'),
+    ['translate', 'pdf', 'documents', 'korean']);
+  assert.deepStrictEqual(words('Can you find me a good MCP server for searching the web?'), ['mcp', 'server', 'searching', 'web']);
+});
+
+test('groups beyond the limit are reported, not silently cut', () => {
+  const r = S.interpretPurpose('alpha beta gamma delta epsilon zeta eta theta', glossary);
+  assert.strictEqual(r.groups.length, S.MAX_GROUPS);
+  assert.deepStrictEqual(r.dropped.map((g) => g[0]), ['eta', 'theta']);
+});
+
+test('Korean the glossary does not know is listed as ignored', () => {
+  assert.deepStrictEqual(S.interpretPurpose('pdf 렌더링', glossary).ignored, ['렌더링']);
+  assert.deepStrictEqual(S.interpretPurpose('PDF 번역 도구', glossary).ignored, []); // 도구 is filler, 번역 is known
+  assert.throws(() => S.interpretPurpose('노무현 연설문', glossary), (e) => e.code === 'no_terms' && /Not understood/.test(e.message));
+});
+
+test('digits, symbols and trailing punctuation in English terms', () => {
+  assert.deepStrictEqual(words('3D printing'), ['3d', 'printing']);
+  assert.deepStrictEqual(words('C# parser'), ['c#', 'parser']);
+  assert.deepStrictEqual(words('R language'), ['r', 'language']);
+  assert.deepStrictEqual(words('node.js library'), ['node.js', 'library']);
+  assert.deepStrictEqual(words('law. labor.'), ['law', 'labor']);
+  assert.deepStrictEqual(words('year 2024 report'), ['year', 'report']);
+});
+
+test('repeated groups count once; chips added later are merged, deduplicated and capped', () => {
+  assert.deepStrictEqual(S.parseTermsArg('law|law, law'), [['law']]);
+  const merged = S.mergeGroups([['a'], ['b'], ['c'], ['d'], ['e']], S.parseTermsArg('x,y,z,a'));
+  assert.strictEqual(merged.groups.length, S.MAX_GROUPS);
+  assert.deepStrictEqual(merged.dropped.map((g) => g[0]), ['y', 'z']);
+  assert.deepStrictEqual(S.mergeGroups([['law']], [['law']]).groups, [['law']]);
+  // a chip whose words all sit in an existing chip adds nothing; a chip with a new word is kept
+  assert.deepStrictEqual(S.mergeGroups([['law', 'statute', 'legal']], [['law']]).groups, [['law', 'statute', 'legal']]);
+  assert.deepStrictEqual(S.mergeGroups([['law', 'statute']], [['law', 'regulation']]).groups, [['law', 'statute'], ['law', 'regulation']]);
+});
+
+test('blank characters are handled like discover.py does', () => {
+  [0x1c, 0x85, 0xfeff, 0xa0, 0x3000].forEach((code) => {
+    assert.deepStrictEqual(S.parseTermsArg('law,' + String.fromCharCode(code)), [['law']], code.toString(16));
+  });
+});
+
+test('short words do not match by stripping an s', () => {
+  assert.strictEqual(S.wordIn('as', new Set(['a'])), false);
+  assert.strictEqual(S.wordIn('its', new Set(['it'])), false);
+  assert.strictEqual(S.wordIn('news', new Set(['new'])), false);
+  assert.strictEqual(S.wordIn('ios', new Set(['io'])), false);
+  assert.strictEqual(S.wordIn('tools', new Set(['tool'])), true);
+  assert.strictEqual(S.wordIn('pdf', new Set(['pdfs'])), true);
+});
+
+test('a word no repository has is reported and does not decide the result', () => {
+  const pool = Array.from({ length: 12 }, (_, i) => repo('o/pdf-' + i, { stars: 10 + i, description: 'pdf translation', topics: ['pdf'] }));
+  const base = S.runSearch(pool, [['pdf'], ['translation']], { now: NOW });
+  const withAbsent = S.runSearch(pool, [['pdf'], ['translation'], ['xyzzy']], { now: NOW });
+  assert.strictEqual(withAbsent.shown, base.shown);
+  assert.deepStrictEqual(withAbsent.main.map((r) => r.rel), base.main.map((r) => r.rel));
+  assert.deepStrictEqual(withAbsent.unmatched, [['xyzzy']]);
+  assert.deepStrictEqual(base.unmatched, []);
+});
+
+test('only GitHub timestamps count as dates; the rest means "no date", never NaN', () => {
+  assert.strictEqual(S.daysSince('2026-10-01T00:00:00Z', NOW), 11);
+  ['2026-10-01', '2026-10-01T00:00:00', 'bad', '2026-13-45T00:00:00Z', '2026-02-30T00:00:00Z', '2026-01-01T24:00:00Z',
+    '2026-10-01T00:00:60Z', '0001-01-01T00:00:00Z', '2026-10-01T00:00:00Z\n', '', null, undefined].forEach((v) => {
+    assert.strictEqual(S.daysSince(v, NOW), 9999, String(v));
+  });
+  assert.strictEqual(S.daysSince('2099-01-01T00:00:00Z', NOW), 0);
+  assert.strictEqual(S.daysSince('2024-02-29T12:00:00Z', NOW) > 0, true); // a real leap day is valid
+});
