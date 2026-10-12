@@ -42,6 +42,36 @@ class SiteStructure(unittest.TestCase):
         self.assertIn("site/stars.json", [l.strip() for l in lines], "the workflow builds stars.json; it is not committed")
 
 
+    def test_content_security_policy_allows_only_the_sites_own_files(self):
+        html = (SITE / "index.html").read_text(encoding="utf-8")
+        m = re.search(r'<meta http-equiv="Content-Security-Policy" content="([^"]+)">', html)
+        self.assertIsNotNone(m, "the page needs a CSP meta tag (GitHub Pages cannot set headers)")
+        policy = dict(d.strip().split(" ", 1) for d in m.group(1).split(";") if d.strip())
+        self.assertEqual(policy["default-src"], "'none'")
+        self.assertEqual(policy["script-src"], "'self'")
+        self.assertEqual(policy["style-src"], "'self'")
+        self.assertEqual(policy["connect-src"], "'self'")
+        self.assertEqual(policy["base-uri"], "'none'")
+        self.assertEqual(policy["form-action"], "'none'")
+        self.assertNotIn("unsafe", m.group(1))
+        self.assertNotIn("*", m.group(1))
+
+    def test_nothing_is_inline_so_the_policy_can_stay_strict(self):
+        html = (SITE / "index.html").read_text(encoding="utf-8")
+        for tag in re.findall(r"<script[^>]*>", html):
+            self.assertIn("src=", tag, "inline script: " + tag)
+        self.assertNotRegex(html, r"<style")
+        self.assertNotRegex(html, r"\sstyle=")
+        self.assertNotRegex(html, r"\son[a-z]+=")
+        for name in ("app.js", "search.js"):
+            self.assertNotRegex((SITE / name).read_text(encoding="utf-8"), r"\.style\b|setAttribute\(.style", name)
+
+    def test_results_are_not_one_big_live_region(self):
+        html = (SITE / "index.html").read_text(encoding="utf-8")
+        self.assertNotIn("aria-live", html)
+        self.assertRegex(html, r'<p id="status" class="sr-only" role="status">')
+
+
 class WorkflowSafety(unittest.TestCase):
     """The workflow has never run, so its structure is checked here."""
 

@@ -9,6 +9,7 @@
   --warn-bg: #fff3d6;
   --warn-border: #e2b34a;
   --card: #ffffff;
+  --field: #767f89; /* input borders need 3:1 against the page (WCAG 1.4.11) */
   color-scheme: light;
 }
 
@@ -24,6 +25,7 @@
     --warn-bg: #3a2f14;
     --warn-border: #8a6a22;
     --card: #1a1e23;
+    --field: #7d8791;
     color-scheme: dark;
   }
 }
@@ -73,7 +75,7 @@ input[type="search"], input[type="text"] {
   font: inherit;
   color: var(--fg);
   background: var(--card);
-  border: 1.5px solid var(--border);
+  border: 1.5px solid var(--field);
   border-radius: 999px;
 }
 
@@ -119,17 +121,18 @@ main:not(.home) .examples { display: none; }
 
 .chip button {
   padding: 0 8px; border: none; background: none; color: var(--muted); font-size: 16px; line-height: 1.4;
-  border-radius: 999px;
+  border-radius: 999px; min-width: 24px; min-height: 24px; /* WCAG 2.2 target size */
 }
 
 .chip button:hover { color: var(--fg); }
 
 .add-form { display: flex; gap: 6px; }
-.add-form input { padding: 4px 12px; font-size: 14px; width: 220px; }
+.add-form input { padding: 4px 12px; font-size: 16px; width: 240px; } /* 16px: iOS Safari zooms smaller fields */
 .add-form button { padding: 3px 12px; font-size: 14px; }
 
 .toggle { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); cursor: pointer; }
 .summary { color: var(--muted); font-size: 14px; margin: 10px 0 8px; }
+.more { display: block; margin: 14px auto 0; }
 
 .message {
   margin: 14px 0; padding: 12px 14px; border: 1.5px solid var(--warn-border);

@@ -24,7 +24,7 @@ python -m http.server 8765 --directory site
 ## 테스트
 
 ```bash
-node --test tests/search.test.js
+node --test tests/search.test.js tests/app.test.js
 python -m unittest discover -s tests
 ```
 

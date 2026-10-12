@@ -4,8 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>스타 검색</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
 <meta name="description" content="스타해 둔 GitHub 저장소 안에서 문장으로 찾는 검색">
 <link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:,">
 </head>
 <body>
 <main id="app" class="home">
@@ -25,7 +27,8 @@
     <button type="button" class="link" data-q="pdf translation">pdf translation</button>
   </p>
 
-  <section id="results" aria-live="polite" hidden>
+  <p id="status" class="sr-only" role="status"></p>
+  <section id="results" hidden>
     <p id="notice-interpret" class="note"></p>
     <p id="notes" class="note notes" hidden></p>
     <div id="terms-box">
@@ -41,6 +44,7 @@
     <p id="summary" class="summary"></p>
     <p id="message" class="message" hidden></p>
     <ol id="list" class="list"></ol>
+    <button id="more" class="more" type="button" hidden>더 보기</button>
     <section id="small-box" hidden>
       <h2>스타 500개 미만이면서 관련도가 높은 저장소</h2>
       <ol id="small-list" class="list"></ol>
