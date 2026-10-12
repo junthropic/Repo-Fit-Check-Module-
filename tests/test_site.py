@@ -70,6 +70,14 @@ class SiteStructure(unittest.TestCase):
         css = (SITE / "style.css").read_text(encoding="utf-8")
         self.assertRegex(css, r"\[hidden\]\s*\{\s*display:\s*none\s*!important")
 
+    def test_the_repository_has_an_mit_license_and_the_page_credits_its_data(self):
+        text = (ROOT / "LICENSE").read_text(encoding="utf-8")
+        self.assertTrue(text.startswith("MIT License"))
+        self.assertIn("Copyright (c) 2026", text)
+        self.assertIn("Permission is hereby granted", text)
+        html = (SITE / "index.html").read_text(encoding="utf-8")
+        self.assertIn("각 저장소의 사용 조건은 그 저장소의 라이선스를 따릅니다", html)
+
     def test_results_are_not_one_big_live_region(self):
         html = (SITE / "index.html").read_text(encoding="utf-8")
         self.assertNotIn("aria-live", html)
