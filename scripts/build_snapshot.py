@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""Write site/stars.json from a GitHub user's *public* starred list.
+
+Uses the public endpoint (users/<user>/starred), never the logged-in `user/starred`, because
+that one can include private repositories. If any private repository shows up anyway, the
+build fails (exit code 3) and nothing is written.
+
+  python scripts/build_snapshot.py --user junthropic
+  python scripts/build_snapshot.py --from-file raw.json --user junthropic   # offline / tests
+
+Needs the `gh` CLI (logged in, or GH_TOKEN set) unless --from-file is given.
+"""
+import argparse
+import json
+import re
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+FULL_NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+MAX_DESCRIPTION = 300
+MAX_TOPICS = 30
+
+
+class PrivateRepoError(RuntimeError):
+    pass
+
+
+def clean_text(text, limit):
+    return CONTROL.sub(" ", text or "").strip()[:limit]
+
+
+def normalize(raw):
+    """Keep only the fields the site uses. Everything else (owner details, urls, ids) is dropped."""
+    full_name = raw.get("full_name") or ""
+    if not FULL_NAME.match(full_name):
+        raise ValueError(f"unexpected repository name: {full_name!r}")
+    lic = (raw.get("license") or {}).get("spdx_id")
+    return {
+        "full_name": full_name,
+        "description": clean_text(raw.get("description"), MAX_DESCRIPTION),
+        "stars": int(raw.get("stargazers_count") or 0),
+        "pushed_at": raw.get("pushed_at"),
+        "license": lic,
+        "archived": bool(raw.get("archived")),
+        "fork": bool(raw.get("fork")),
+        "language": raw.get("language"),
+        "topics": [clean_text(t, 50) for t in (raw.get("topics") or [])][:MAX_TOPICS],
+    }
+
+
+def build(raw_repos, user, now=None):
+    private = [r.get("full_name") for r in raw_repos if r.get("private") or r.get("visibility") == "private"]
+    if private:
+        raise PrivateRepoError(f"{len(private)} private repositories in the list; refusing to publish: {private[:3]}")
+    repos = [normalize(r) for r in raw_repos]
+    now = now or datetime.now(timezone.utc)
+    return {
+        "generated_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "user": user,
+        "count": len(repos),
+        "repos": repos,
+    }
+
+
+def fetch(user):
+    p = subprocess.run(["gh", "api", f"users/{user}/starred?per_page=100", "--paginate", "--slurp"],
+                       capture_output=True, text=True, encoding="utf-8")
+    if p.returncode != 0:
+        raise RuntimeError((p.stderr or p.stdout).strip()[:300])
+    return [r for page in json.loads(p.stdout) for r in page]
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--user", required=True, help="GitHub account whose public stars are published")
+    ap.add_argument("--out", default=str(ROOT / "site" / "stars.json"))
+    ap.add_argument("--from-file", help="read the raw API response from a file instead of calling gh")
+    args = ap.parse_args(argv)
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    try:
+        raw = json.load(open(args.from_file, encoding="utf-8")) if args.from_file else fetch(args.user)
+        snapshot = build(raw, args.user)
+    except PrivateRepoError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 3
+    except (RuntimeError, ValueError, OSError) as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.out).write_text(json.dumps(snapshot, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    print(f"wrote {args.out}: {snapshot['count']} repositories for {args.user}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

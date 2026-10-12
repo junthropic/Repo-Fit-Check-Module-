@@ -1,0 +1,58 @@
+name: Build and deploy
+
+# Rebuilds stars.json from the public starred list every day, runs the tests against it
+# (including the parity test with the repo-fit-check skill), and publishes site/ to GitHub Pages.
+# Deploy only runs if every test passes.
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      STAR_USER: ${{ vars.STAR_USER || github.repository_owner }}
+      REPO_FIT_CHECK_DIR: ${{ github.workspace }}/repo-fit-check
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out the skill whose scoring rules the site must match
+        uses: actions/checkout@v4
+        with:
+          repository: junthropic/Repo-Fit-Check
+          path: repo-fit-check
+
+      - name: Build the snapshot (fails if a private repository is in the list)
+        run: python3 scripts/build_snapshot.py --user "$STAR_USER"
+
+      - name: JavaScript tests
+        run: node --test tests/search.test.js
+
+      - name: Python tests (snapshot, site structure, parity with the skill)
+        run: python3 -m unittest discover -s tests
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
