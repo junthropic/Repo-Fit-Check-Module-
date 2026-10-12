@@ -263,6 +263,7 @@
 
   function setBusy(busy) {
     el.form.querySelector('button').disabled = busy;
+    el.app.classList.toggle('busy', busy);
     if (busy) announce('문장을 해석하는 중입니다.');
   }
 

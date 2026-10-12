@@ -311,10 +311,12 @@ test('while the model works the search button is off and the status says so; aft
   app.submit('pdf');
   await app.settle(5);
   assert.strictEqual(app.$('search-form').querySelector('button').disabled, true);
+  assert.strictEqual(app.$('app').classes.has('busy'), true); // the page shows a waiting bar
   assert.match(app.$('status').textContent, /해석하는 중/);
   release();
   await app.settle();
   assert.strictEqual(app.$('search-form').querySelector('button').disabled, false);
+  assert.strictEqual(app.$('app').classes.has('busy'), false);
 });
 
 test('every kind of model failure falls back to the glossary and says it was the simple interpretation', async () => {
