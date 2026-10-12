@@ -12,18 +12,23 @@ const repo = (name, over) => Object.assign({
   archived: false, fork: false, language: null, topics: [],
 }, over);
 
-test('AC-7: every license state has a badge; none and unknown are warnings', () => {
-  assert.deepStrictEqual(S.licenseBadge(null).tone, 'warn');
-  assert.strictEqual(S.licenseBadge(null).text, '라이선스 없음');
+test('AC-7: every license state has a badge; not detected and unidentified are warnings that claim no more than GitHub said', () => {
+  const none = S.licenseBadge(null);
+  assert.strictEqual(none.tone, 'warn');
+  assert.strictEqual(none.text, '라이선스 미감지');
+  assert.match(none.note, /찾지 못했습니다/);
   assert.strictEqual(S.licenseBadge('').tone, 'warn');
-  assert.strictEqual(S.licenseBadge('NOASSERTION').text, '라이선스 불명');
-  assert.strictEqual(S.licenseBadge('NOASSERTION').tone, 'warn');
+  const unknown = S.licenseBadge('NOASSERTION');
+  assert.strictEqual(unknown.text, '라이선스 불명');
+  assert.strictEqual(unknown.tone, 'warn');
+  assert.match(unknown.note, /LICENSE 파일이 있어도/);       // a file may well exist: do not say "no permission"
+  assert.doesNotMatch(unknown.note + unknown.short, /사용 권한 없음/);
   assert.strictEqual(S.licenseBadge('OTHER').tone, 'warn');
   assert.strictEqual(S.licenseBadge('MIT').tone, 'ok');
   assert.strictEqual(S.licenseBadge('mit').tone, 'ok');
+  assert.strictEqual(S.licenseBadge('MIT-0').tone, 'ok');   // was missing from the permissive list
   assert.strictEqual(S.licenseBadge('AGPL-3.0').tone, 'info');
   assert.match(S.licenseBadge('AGPL-3.0').note, /조건/);
-  assert.match(S.licenseBadge(null).note, /사용 권한 없음/);
 });
 
 test('AC-2: no match gives an explicit empty result, with the terms that were used', () => {

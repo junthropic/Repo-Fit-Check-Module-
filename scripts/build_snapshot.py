@@ -20,9 +20,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-FULL_NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-CONTROL = re.compile(r"[\x00-\x1f\x7f]")
-MAX_DESCRIPTION = 300
+FULL_NAME = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+# Control characters, zero-width and bidirectional marks (a U+202E can reverse how a description reads).
+CONTROL = re.compile(r"[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]")
+# GitHub timestamps only; anything else is stored as "no date" so the site never has to guess.
+ISO_Z = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
+# GitHub allows 350 characters. The whole text is kept so the site searches exactly what the skill searches.
+MAX_DESCRIPTION = 1000
 MAX_TOPICS = 30
 
 
@@ -37,14 +41,14 @@ def clean_text(text, limit):
 def normalize(raw):
     """Keep only the fields the site uses. Everything else (owner details, urls, ids) is dropped."""
     full_name = raw.get("full_name") or ""
-    if not FULL_NAME.match(full_name):
+    if not FULL_NAME.fullmatch(full_name):
         raise ValueError(f"unexpected repository name: {full_name!r}")
     lic = (raw.get("license") or {}).get("spdx_id")
     return {
         "full_name": full_name,
         "description": clean_text(raw.get("description"), MAX_DESCRIPTION),
         "stars": int(raw.get("stargazers_count") or 0),
-        "pushed_at": raw.get("pushed_at"),
+        "pushed_at": raw.get("pushed_at") if ISO_Z.fullmatch(raw.get("pushed_at") or "") else None,
         "license": lic,
         "archived": bool(raw.get("archived")),
         "fork": bool(raw.get("fork")),
@@ -53,10 +57,17 @@ def normalize(raw):
     }
 
 
-def build(raw_repos, user, now=None):
+class EmptyListError(RuntimeError):
+    pass
+
+
+def build(raw_repos, user, now=None, min_count=1):
     """Return (snapshot, number_of_private_repositories_left_out)."""
     visible = [r for r in raw_repos if not is_private(r)]
     repos = [normalize(r) for r in visible]
+    if len(repos) < min_count:
+        raise EmptyListError(f"only {len(repos)} public repositories for {user} (minimum {min_count}); "
+                             "refusing to publish an empty or truncated list")
     now = now or datetime.now(timezone.utc)
     snapshot = {
         "generated_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -79,13 +90,15 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--user", required=True, help="GitHub account whose public stars are published")
     ap.add_argument("--out", default=str(ROOT / "site" / "stars.json"))
+    ap.add_argument("--min-count", type=int, default=1,
+                    help="fail instead of publishing fewer repositories than this (guards against an empty reply)")
     ap.add_argument("--from-file", help="read the raw API response from a file instead of calling gh")
     args = ap.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     try:
         raw = json.load(open(args.from_file, encoding="utf-8")) if args.from_file else fetch(args.user)
-        snapshot, left_out = build(raw, args.user)
+        snapshot, left_out = build(raw, args.user, min_count=args.min_count)
     except (RuntimeError, ValueError, OSError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1

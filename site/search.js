@@ -27,7 +27,8 @@
     'management']);
   const SINGLE_LETTER_OK = new Set(['c', 'r']); // language names; any other one-letter word is noise
   const FIELD_WEIGHT = [['name', 1.0], ['topics', 0.9], ['description', 0.7]];
-  const PERMISSIVE = new Set(['MIT', 'APACHE-2.0', 'BSD-3-CLAUSE', 'BSD-2-CLAUSE', 'ISC', 'UNLICENSE', 'CC0-1.0', '0BSD']);
+  const PERMISSIVE = new Set(['MIT', 'MIT-0', 'APACHE-2.0', 'BSD-3-CLAUSE', 'BSD-2-CLAUSE', 'BSD-1-CLAUSE', 'ISC', 'UNLICENSE',
+    'CC0-1.0', '0BSD', 'BSL-1.0', 'ZLIB', 'UNICODE-3.0']);
   const MIN_REL = 0.34;
   const MAX_GROUPS = 6;
   const MAX_QUERY_LENGTH = 200;
@@ -330,13 +331,25 @@
     };
   }
 
-  /** Every result row carries one of these. No license and unknown license are warnings. */
+  /** Every result row carries one of these. Not detected and unidentified licenses are warnings.
+   *  `note` is the tooltip, `short` the words shown on the row. Neither claims more than GitHub told us:
+   *  NOASSERTION usually means a LICENSE file exists that GitHub could not match to a standard license. */
   function licenseBadge(spdx) {
     const s = (spdx || '').toUpperCase();
-    if (!s) return { text: '라이선스 없음', tone: 'warn', note: '명시된 사용 권한 없음' };
-    if (s === 'NOASSERTION' || s === 'OTHER') return { text: '라이선스 불명', tone: 'warn', note: '명시된 사용 권한 없음' };
-    if (PERMISSIVE.has(s)) return { text: spdx, tone: 'ok', note: '' };
-    return { text: spdx, tone: 'info', note: '사용 조건을 확인하세요' };
+    if (!s) {
+      return {
+        text: '라이선스 미감지', tone: 'warn', short: '라이선스 직접 확인',
+        note: 'GitHub이 라이선스 파일을 찾지 못했습니다. 명시된 라이선스가 없으면 기본적으로 사용 허락이 없는 것으로 봅니다',
+      };
+    }
+    if (s === 'NOASSERTION' || s === 'OTHER') {
+      return {
+        text: '라이선스 불명', tone: 'warn', short: '라이선스 직접 확인',
+        note: 'LICENSE 파일이 있어도 GitHub이 표준 라이선스로 식별하지 못했습니다. 파일을 직접 확인하세요',
+      };
+    }
+    if (PERMISSIVE.has(s)) return { text: spdx, tone: 'ok', short: '', note: '' };
+    return { text: spdx, tone: 'info', short: '사용 조건 확인', note: '사용 조건을 확인하세요' };
   }
 
   const FIELD_LABEL = { name: '이름', topics: '토픽', description: '설명' };

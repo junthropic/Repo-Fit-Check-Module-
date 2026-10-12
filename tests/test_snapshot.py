@@ -71,10 +71,49 @@ class Snapshot(unittest.TestCase):
         self.assertNotIn("left_out", text)  # the number of hidden repositories is not published either
 
     def test_text_is_cleaned_and_limited(self):
-        r = B.normalize(raw(description="a\x00b\x1fc" + "x" * 500, topics=["ok", "t\x07x"]))
+        r = B.normalize(raw(description="a\x00b\x1fc" + "x" * 1500, topics=["ok", "t\x07x"]))
         self.assertNotRegex(r["description"], r"[\x00-\x1f]")
         self.assertEqual(len(r["description"]), B.MAX_DESCRIPTION)
         self.assertEqual(r["topics"], ["ok", "t x"])
+
+    def test_the_whole_github_description_is_kept(self):
+        text = "word " * 70  # 350 characters is GitHub's own limit
+        self.assertEqual(B.normalize(raw(description=text))["description"], text.strip())
+        # so the site searches exactly what the skill searches (a term at the end of a long description is found)
+        tail = "x" * 340 + " rotation"
+        self.assertTrue(B.normalize(raw(description=tail))["description"].endswith("rotation"))
+
+    def test_invisible_and_direction_control_characters_are_removed(self):
+        for code in (0x85, 0x200b, 0x200e, 0x2028, 0x202e, 0x2066, 0xfeff):
+            r = B.normalize(raw(description="x" + chr(code) + "evil", topics=["t" + chr(code)]))
+            self.assertNotIn(chr(code), r["description"], hex(code))
+            self.assertNotIn(chr(code), r["topics"][0], hex(code))
+
+    def test_only_github_timestamps_are_stored(self):
+        self.assertEqual(B.normalize(raw(pushed_at="2026-10-01T00:00:00Z"))["pushed_at"], "2026-10-01T00:00:00Z")
+        for bad in ("garbage", "2026-10-01", "2026-10-01T00:00:00", "2026-10-01T00:00:00Z\n", None, ""):
+            self.assertIsNone(B.normalize(raw(pushed_at=bad))["pushed_at"], repr(bad))
+
+    def test_an_empty_or_all_private_list_is_not_published(self):
+        with self.assertRaises(B.EmptyListError):
+            B.build([], "u")
+        with self.assertRaises(B.EmptyListError):
+            B.build([raw("a/x", private=True)], "u")
+        snap, _ = B.build([], "u", min_count=0)  # an explicit choice for a brand new account
+        self.assertEqual(snap["count"], 0)
+
+    def test_main_exits_1_and_writes_nothing_for_an_empty_reply(self):
+        with tempfile.TemporaryDirectory() as d:
+            src, out = Path(d) / "raw.json", Path(d) / "stars.json"
+            src.write_text("[]", encoding="utf-8")
+            code, _, stderr = run_main(["--user", "u", "--from-file", str(src), "--out", str(out)])
+            self.assertEqual(code, 1)
+            self.assertIn("refusing to publish", stderr)
+            self.assertFalse(out.exists())
+
+    def test_a_name_with_a_trailing_newline_is_rejected(self):
+        with self.assertRaises(ValueError):
+            B.normalize(raw("a/b\n"))
 
     def test_missing_license_stays_empty(self):
         self.assertIsNone(B.normalize(raw(license=None))["license"])

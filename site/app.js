@@ -75,7 +75,7 @@
     const facts = ['스타 ' + repo.stars.toLocaleString('en-US'), relativeDays(repo.days)];
     if (repo.language) facts.push(repo.language);
     if (repo.why.length) facts.push('일치: ' + repo.why.map(S.whyLabel).join(', '));
-    if (badge.note) facts.push(badge.note);
+    if (badge.short) facts.push(badge.short);
     li.appendChild(make('p', 'facts', facts.join(' · ')));
     return li;
   }
