@@ -84,6 +84,24 @@ class SiteStructure(unittest.TestCase):
         css = (SITE / "style.css").read_text(encoding="utf-8")
         self.assertRegex(css, r"\[hidden\]\s*\{\s*display:\s*none\s*!important")
 
+    def test_the_font_is_served_from_the_site_with_its_license(self):
+        html = (SITE / "index.html").read_text(encoding="utf-8")
+        policy = re.search(r'Content-Security-Policy" content="([^"]+)"', html).group(1)
+        self.assertIn("font-src 'self'", policy)
+        css = (SITE / "style.css").read_text(encoding="utf-8")
+        faces = re.findall(r"@font-face\s*\{(.*?)\}", css, re.S)
+        self.assertEqual(len(faces), 1)
+        self.assertIn("font-display: swap", faces[0])  # text shows at once in a fallback font
+        url = re.search(r"url\(([^)]+)\)", faces[0]).group(1)
+        self.assertRegex(url, r"^fonts/[A-Za-z0-9._-]+\.woff2$")  # relative, never another host
+        font = SITE / url
+        self.assertTrue(font.is_file())
+        self.assertEqual(font.read_bytes()[:4], b"wOF2")
+        self.assertLess(font.stat().st_size, 100_000)  # the Latin subset only; Hangul uses system fonts
+        notice = (SITE / "fonts" / "Inter-OFL.txt").read_text(encoding="utf-8")
+        self.assertIn("SIL Open Font License, Version 1.1", notice)
+        self.assertIn("Copyright 2016 The Inter Project Authors", notice)
+
     def test_search_engines_are_asked_not_to_index_the_page(self):
         html = (SITE / "index.html").read_text(encoding="utf-8")
         self.assertRegex(html, r'<meta name="robots" content="noindex, nofollow">')
