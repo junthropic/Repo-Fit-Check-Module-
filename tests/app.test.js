@@ -92,7 +92,7 @@ async function boot({ stars, search = '', fetchFails = false, protocol = 'http:'
     constructor(...a) { if (a.length === 0) super(baseNow); else super(...a); }
     static now() { return baseNow; }
   }
-  // the page waits 3 seconds for the model; the test clock runs it a hundred times faster
+  // the page waits 8 seconds for the model; the test clock runs it a hundred times faster
   const fastTimeout = (f, ms) => setTimeout(f, ms / 100);
   const sandbox = { window, document: doc, location, history, fetch, URLSearchParams, Date: FakeDate, Number, Math, String, Array, Boolean, Promise, JSON,
     AbortController, setTimeout: fastTimeout, clearTimeout };

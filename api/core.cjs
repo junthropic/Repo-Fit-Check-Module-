@@ -26,7 +26,7 @@ const DEFAULTS = {
   perDay: 60,          // model calls of one visitor
   dailyTotal: 1000,    // model calls of everybody; the cost ceiling
   cacheTtl: 7 * 86400,
-  modelTimeoutMs: 2500, // the page waits 3 seconds
+  modelTimeoutMs: 6000, // the page waits 8 seconds
 };
 
 const OUTPUT_SCHEMA = {

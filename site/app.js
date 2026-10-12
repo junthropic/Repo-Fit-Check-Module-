@@ -8,7 +8,7 @@
   const PAGE = 10; // results shown at first, and added by each "more"
   const MAX_G_PARAM = 400; // a shared link may carry at most this many characters of search terms
   const MAX_WORDS_PER_GROUP = 8;
-  const MODEL_TIMEOUT_MS = 3000; // the model gets this long; after that the glossary interpretation is used
+  const MODEL_TIMEOUT_MS = 8000; // the model gets this long; after that the glossary interpretation is used
   const MODEL_WORD = /^[A-Za-z0-9][A-Za-z0-9+#.-]{0,39}$/;
 
   const state = {
