@@ -39,7 +39,7 @@ jobs:
           repository: junthropic/Repo-Fit-Check
           path: repo-fit-check
 
-      - name: Build the snapshot (fails if a private repository is in the list)
+      - name: Build the snapshot (private repositories are left out; only their count is logged)
         run: python3 scripts/build_snapshot.py --user "$STAR_USER"
 
       - name: JavaScript tests

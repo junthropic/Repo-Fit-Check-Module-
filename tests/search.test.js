@@ -68,6 +68,18 @@ test('Korean text maps through the glossary; unknown Korean fails loudly', () =>
   assert.throws(() => S.parseTermsArg('  ,  '), (e) => e.code === 'no_terms');
 });
 
+test('"법" inside a compound gives a law term; words that merely contain it do not', () => {
+  const flat = (text) => S.parsePurpose(text, glossary).flat();
+  assert.ok(flat('한국 노동법 준수를 점검하는 도구 찾고 있어').includes('law'));
+  ['문서 작성 방법 pdf', 'pdf 사용법', '법인 회계', '영어 문법 pdf'].forEach((t) => {
+    const w = flat(t);
+    assert.ok(!w.includes('law') && !w.includes('statute'), t + ' -> ' + w);
+  });
+  assert.ok(flat('법인 회계').includes('corporation'));
+  assert.ok(flat('불법 scraper').includes('illegal'));
+  assert.throws(() => S.parsePurpose('방법', glossary), (e) => e.code === 'no_terms');
+});
+
 test('English words pass through; stopwords and generic words are dropped', () => {
   const g = S.parsePurpose('pdf translation tool for the platform', glossary);
   assert.deepStrictEqual(g, [['pdf'], ['translation']]);

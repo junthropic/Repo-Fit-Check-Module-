@@ -2,8 +2,9 @@
 """Write site/stars.json from a GitHub user's *public* starred list.
 
 Uses the public endpoint (users/<user>/starred), never the logged-in `user/starred`, because
-that one can include private repositories. If any private repository shows up anyway, the
-build fails (exit code 3) and nothing is written.
+that one can include private repositories. A starred repository can also be turned private (or
+internal) by its owner later. Those are left out silently: the build goes on, they never reach
+stars.json, and only their number (never their names) is printed.
 
   python scripts/build_snapshot.py --user junthropic
   python scripts/build_snapshot.py --from-file raw.json --user junthropic   # offline / tests
@@ -25,8 +26,8 @@ MAX_DESCRIPTION = 300
 MAX_TOPICS = 30
 
 
-class PrivateRepoError(RuntimeError):
-    pass
+def is_private(raw):
+    return bool(raw.get("private")) or raw.get("visibility") in ("private", "internal")
 
 
 def clean_text(text, limit):
@@ -53,17 +54,17 @@ def normalize(raw):
 
 
 def build(raw_repos, user, now=None):
-    private = [r.get("full_name") for r in raw_repos if r.get("private") or r.get("visibility") == "private"]
-    if private:
-        raise PrivateRepoError(f"{len(private)} private repositories in the list; refusing to publish: {private[:3]}")
-    repos = [normalize(r) for r in raw_repos]
+    """Return (snapshot, number_of_private_repositories_left_out)."""
+    visible = [r for r in raw_repos if not is_private(r)]
+    repos = [normalize(r) for r in visible]
     now = now or datetime.now(timezone.utc)
-    return {
+    snapshot = {
         "generated_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "user": user,
         "count": len(repos),
         "repos": repos,
     }
+    return snapshot, len(raw_repos) - len(visible)
 
 
 def fetch(user):
@@ -84,16 +85,14 @@ def main(argv=None):
         sys.stdout.reconfigure(encoding="utf-8")
     try:
         raw = json.load(open(args.from_file, encoding="utf-8")) if args.from_file else fetch(args.user)
-        snapshot = build(raw, args.user)
-    except PrivateRepoError as e:
-        print(f"ERROR: {e}", file=sys.stderr)
-        return 3
+        snapshot, left_out = build(raw, args.user)
     except (RuntimeError, ValueError, OSError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(snapshot, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    print(f"wrote {args.out}: {snapshot['count']} repositories for {args.user}")
+    note = f" ({left_out} private or internal left out)" if left_out else ""
+    print(f"wrote {args.out}: {snapshot['count']} repositories for {args.user}{note}")
     return 0
 
 

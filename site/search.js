@@ -73,7 +73,8 @@
       .forEach(([ko, en]) => {
         if (purpose.includes(ko) && !used.some((u) => ko.includes(u) || u.includes(ko))) {
           used.push(ko);
-          found.push([purpose.indexOf(ko), en.split('|').map((w) => w.toLowerCase())]);
+          // an empty value means "ignore this word" (방법 must not trigger 법)
+          if (en) found.push([purpose.indexOf(ko), en.split('|').map((w) => w.toLowerCase())]);
         }
       });
     const re = /[A-Za-z][A-Za-z0-9\-.]+/g;
