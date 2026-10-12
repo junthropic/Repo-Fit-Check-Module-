@@ -70,6 +70,12 @@ class SiteStructure(unittest.TestCase):
         css = (SITE / "style.css").read_text(encoding="utf-8")
         self.assertRegex(css, r"\[hidden\]\s*\{\s*display:\s*none\s*!important")
 
+    def test_search_engines_are_asked_not_to_index_the_page(self):
+        html = (SITE / "index.html").read_text(encoding="utf-8")
+        self.assertRegex(html, r'<meta name="robots" content="noindex, nofollow">')
+        head = html.split("</head>")[0]
+        self.assertIn('name="robots"', head)  # in the head, where crawlers read it
+
     def test_the_repository_has_an_mit_license_and_the_page_credits_its_data(self):
         text = (ROOT / "LICENSE").read_text(encoding="utf-8")
         self.assertTrue(text.startswith("MIT License"))
