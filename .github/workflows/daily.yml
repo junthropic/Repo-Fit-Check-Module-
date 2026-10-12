@@ -1,8 +1,20 @@
 name: Build and deploy
 
-# Rebuilds stars.json from the public starred list every day, runs the tests against it
-# (including the parity test with the repo-fit-check skill), and publishes site/ to GitHub Pages.
-# Deploy only runs if every test passes.
+# Rebuilds stars.json from the public starred list every day, tests it (including the parity test
+# with the repo-fit-check skill) and publishes site/ to GitHub Pages. Deploy runs only if every test passes.
+#
+# Setup, once: repository Settings > Pages > Source: GitHub Actions.
+# Optional repository variables (Settings > Secrets and variables > Actions > Variables):
+#   STAR_USER  the GitHub account whose public stars are published. Default: the repository owner.
+#              For an organisation repository set it, or the site would list the organisation's stars.
+#   MIN_COUNT  fail instead of publishing fewer repositories than this. Default 1 (an empty reply).
+#
+# SKILL_REF pins the repo-fit-check commit that the parity test compares with. Change it together with
+# the site whenever the skill's ranking rules or glossary change. A moving branch would make the daily
+# data refresh fail the moment the skill changes first, and it would run someone else's code in this job.
+#
+# GitHub switches scheduled workflows off after 60 days without repository activity. If the
+# site shows "갱신이 N일 전에 멈춰 있습니다", run this workflow once by hand (Actions > Run workflow).
 
 on:
   schedule:
@@ -13,34 +25,39 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
+# One deployment at a time; never cancel one that is already running.
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
+
+env:
+  SKILL_REF: e4c9aaff8188f4cdeed2e8e855ec69d4c43ed6f3
 
 jobs:
-  deploy:
+  test:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+    timeout-minutes: 15
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       STAR_USER: ${{ vars.STAR_USER || github.repository_owner }}
+      MIN_COUNT: ${{ vars.MIN_COUNT || '1' }}
       REPO_FIT_CHECK_DIR: ${{ github.workspace }}/repo-fit-check
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
-      - name: Check out the skill whose scoring rules the site must match
+      - name: Check out the skill at the pinned commit
         uses: actions/checkout@v4
         with:
           repository: junthropic/Repo-Fit-Check
+          ref: ${{ env.SKILL_REF }}
           path: repo-fit-check
+          persist-credentials: false
 
       - name: Build the snapshot (private repositories are left out; only their count is logged)
-        run: python3 scripts/build_snapshot.py --user "$STAR_USER"
+        run: python3 scripts/build_snapshot.py --user "$STAR_USER" --min-count "$MIN_COUNT"
 
       - name: JavaScript tests
         run: node --test tests/search.test.js
@@ -48,11 +65,21 @@ jobs:
       - name: Python tests (snapshot, site structure, parity with the skill)
         run: python3 -m unittest discover -s tests
 
-      - uses: actions/configure-pages@v5
-
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
 
+  # Separate job: only this one holds the permissions to change the published site.
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - id: deployment
         uses: actions/deploy-pages@v4

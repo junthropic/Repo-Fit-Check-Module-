@@ -1,6 +1,5 @@
 """Static checks on the page: AC-10 notice, no HTML injection paths, no third-party requests."""
 import re
-import subprocess
 import unittest
 from pathlib import Path
 
@@ -38,9 +37,45 @@ class SiteStructure(unittest.TestCase):
             src = (SITE / name).read_text(encoding="utf-8")
             self.assertNotRegex(src, r"https?://(?!github\.com/)", f"{name} references another host")
 
-    def test_snapshot_is_not_committed(self):
-        ignored = subprocess.run(["git", "check-ignore", "site/stars.json"], cwd=ROOT, capture_output=True, text=True)
-        self.assertEqual(ignored.returncode, 0, "site/stars.json must be in .gitignore (the workflow builds it)")
+    def test_snapshot_is_ignored_by_git(self):
+        lines = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+        self.assertIn("site/stars.json", [l.strip() for l in lines], "the workflow builds stars.json; it is not committed")
+
+
+class WorkflowSafety(unittest.TestCase):
+    """The workflow has never run, so its structure is checked here."""
+
+    text = (ROOT / ".github" / "workflows" / "daily.yml").read_text(encoding="utf-8")
+
+    def test_default_permissions_are_read_only_and_only_deploy_can_publish(self):
+        top = self.text.split("jobs:")[0]
+        self.assertRegex(top, r"(?m)^permissions:\s+contents: read\s*$")
+        self.assertNotIn("pages: write", top)
+        test_job, deploy_job = self.text.split("  deploy:")
+        self.assertNotIn("pages: write", test_job)
+        self.assertNotIn("id-token", test_job)
+        self.assertIn("pages: write", deploy_job)
+        self.assertIn("id-token: write", deploy_job)
+
+    def test_the_skill_is_pinned_to_a_commit(self):
+        self.assertRegex(self.text, r"(?m)^  SKILL_REF: [0-9a-f]{40}$")
+        self.assertIn("ref: ${{ env.SKILL_REF }}", self.text)
+
+    def test_checkouts_do_not_keep_the_token(self):
+        self.assertEqual(self.text.count("actions/checkout@"), self.text.count("persist-credentials: false"))
+
+    def test_a_running_deployment_is_never_cancelled(self):
+        self.assertIn("cancel-in-progress: false", self.text)
+        self.assertNotIn("cancel-in-progress: true", self.text)
+
+    def test_jobs_have_time_limits_and_no_untrusted_trigger(self):
+        self.assertEqual(self.text.count("timeout-minutes:"), 2)
+        self.assertNotIn("pull_request_target", self.text)
+        self.assertNotIn("workflow_run", self.text)
+
+    def test_an_empty_list_cannot_be_deployed(self):
+        self.assertIn('--min-count "$MIN_COUNT"', self.text)
+        self.assertIn("needs: test", self.text)
 
 
 if __name__ == "__main__":
