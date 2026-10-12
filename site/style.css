@@ -1,7 +1,7 @@
 /* Design: a search-first reference tool. Minimal and Swiss in structure (one column, strong type hierarchy, one accent),
  * every colour comes from a token so light and dark stay in step. Text is at least 4.5:1, borders of controls 3:1. */
 /* Inter (SIL Open Font License 1.1, see fonts/Inter-OFL.txt), the Latin part of the variable font, served from this site.
- * Hangul and anything else falls through to the system fonts in --font. */
+ * Hangul comes from Noto Sans KR (fonts/noto-sans-kr.css); anything else falls through to the system fonts in --font. */
 @font-face {
   font-family: 'Inter Variable';
   font-style: normal;
@@ -29,7 +29,7 @@
   --warn-border: #ca8a04;
   --radius: 14px;
   --radius-sm: 10px;
-  --font: "Inter Variable", Inter, Pretendard, system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --font: "Inter Variable", "Noto Sans KR Variable", Inter, Pretendard, system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
   color-scheme: light;
 }
 
